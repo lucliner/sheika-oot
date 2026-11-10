@@ -7,28 +7,15 @@ Hookshot's own changelog is at https://github.com/NotRexed/Hookshot/releases
 Based on Hookshot v2.0.14. Hookshot's own changes are listed on its releases page: https://github.com/NotRexed/Hookshot/releases
 
 ### What changed in Sheikah Native
-- Based on Hookshot v2.0.14
-
-
-## Sheikah Native 2026-11-10
-
-Based on Hookshot v2.0.14. Hookshot's own changes are listed on its releases page: https://github.com/NotRexed/Hookshot/releases
-
-### What changed in Sheikah Native
-- Based on Hookshot v2.0.14
-
-
-## Sheikah Native 2026-11-10
-
-Based on Hookshot v2.0.14. Hookshot's own changes are listed on its releases page: https://github.com/NotRexed/Hookshot/releases
-
-### What changed in Sheikah Native
-- Visual live editor (F2): item grid with icons, travel map, time-of-day dial with age switch, and a searchable board of the game's flags (about 4,600 with real names)
-- Item icons are drawn from your own game files at build time (nothing of the game is shipped)
-- Cheats are on by default (HOS_OOT_CHEATS=0 turns them off)
-- Rebranded to Sheikah Native; the game no longer offers to replace itself with Hookshot's builds
-- New: the game tells the player when Hookshot has a newer release than the one Sheikah is based on, and to contact the developer (SHEIKAH_NO_UPSTREAM_CHECK=1 turns it off)
-- New: Sheikah Updater, a Windows program that merges new Hookshot versions into Sheikah, rebuilds the game and publishes releases
-- Based on Hookshot v2.0.14
-
+- Visual live editor: press F2 (or choose Editor in the Insert menu) for a window with four tabs: an item grid with drawn icons (click to give or take, counts for quantities), a map of places to travel to, a time-of-day dial with an age switch, and a searchable board of the game's flags (26,654 entries, about 4,600 with their real names)
+- The editor changes the running game only; it never writes to your save file. It keeps working while the world is paused, and can open and close the pause menu so the HUD lays itself out again after an edit
+- Item icons are the game's own textures, decoded on your PC from your own game files at build time and never shipped; without them the editor draws simple shapes
+- Flag and item names are generated at build time from your own game files (nx2/gamedata_names.py); without them the editor lists entries by hash
+- Cheats are on by default: flight, free camera, teleport, inventory, time and the age switch in the Insert menu no longer need HOS_OOT_CHEATS=1 (HOS_OOT_CHEATS=0 turns them off)
+- Inventory list fixes: the game's own items keep their real names (Hookshot, Longshot, ...) instead of being renamed by the rebrand, and the three Deku Stick bags were added
+- Rebranded to Sheikah Native: names, executable and data files, and the shader cache name (no space in the kernel object's name); Hookshot's credits, the GPL license and its attribution are kept (docs/upstream-readme.md)
+- No update channel: the game never offers to replace itself with Hookshot's builds
+- New: the game tells the player when Hookshot has a newer release than the one Sheikah is based on, and to contact the developer; it only reads public version information, runs in the background, stays silent offline, and downloads nothing (SHEIKAH_NO_UPSTREAM_CHECK=1 turns it off)
+- New: Sheikah Builder, a small Windows program that builds the game from your own dump, with a progress display and remembered settings
+- New: a changelog for Sheikah only (this one); Hookshot's own changes are on its releases page
 
