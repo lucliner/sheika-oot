@@ -7,6 +7,14 @@ Hookshot's own changelog is at https://github.com/NotRexed/Hookshot/releases
 Based on Hookshot v2.0.14. Hookshot's own changes are listed on its releases page: https://github.com/NotRexed/Hookshot/releases
 
 ### What changed in Sheikah Native
+- New: the Sheikah Native logo at the top of the readme
+
+
+## Sheikah Native 2026-11-10
+
+Based on Hookshot v2.0.14. Hookshot's own changes are listed on its releases page: https://github.com/NotRexed/Hookshot/releases
+
+### What changed in Sheikah Native
 - DLSS: the Builder has an optional NVIDIA DLSS SDK folder field. With it the game is built with NVIDIA DLSS Super Resolution (Hookshot's DLSS back end); NVIDIA's SDK files are never shipped, each player fetches them with scripts/ngx_sdk.py
 
 

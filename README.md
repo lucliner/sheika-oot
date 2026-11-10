@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/sheikah-logo.jpg" alt="Sheikah Native" width="640">
+</p>
+
 # Sheikah Native
 
 *The Legend of Zelda: Ocarina of Time* (Nintendo Switch 2) running natively on Windows, built on your PC from your own
