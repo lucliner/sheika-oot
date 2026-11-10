@@ -25,6 +25,8 @@
 #define CORE_PY L"builder_core.py"
 #endif
 
+#include "settings_store.h"
+
 #define WM_LOGLINE (WM_APP + 1)   /* lParam: malloc'd wchar_t line */
 #define WM_JOBDONE (WM_APP + 2)
 #define WM_ASKPUBLISH (WM_APP + 3)
@@ -36,7 +38,7 @@ enum { ID_SYNCED = 100, ID_LATEST, ID_BEHIND, ID_STAGE, ID_PROG, ID_LOG,
        ID_C_BUILD = 170, ID_C_KEEP, ID_C_PUBLISH, ID_C_MAIN };
 
 static HWND g_wnd, g_log, g_prog, g_stage;
-static wchar_t g_ini[MAX_PATH], g_exedir[MAX_PATH];
+static wchar_t g_exedir[MAX_PATH];
 static volatile LONG g_busy = 0;
 static HANDLE g_proc = NULL;
 
@@ -64,32 +66,33 @@ static const struct { int id; const wchar_t *key; const wchar_t *label; int brow
 static void load_settings(void) {
     for (int i = 0; i < (int)(sizeof FIELDS / sizeof FIELDS[0]); i++) {
         wchar_t v[MAX_PATH];
-        GetPrivateProfileStringW(L"settings", FIELDS[i].key, FIELDS[i].id == ID_F_PY ? L"python" : L"", v, MAX_PATH, g_ini);
+        st_get(FIELDS[i].key, v, MAX_PATH, FIELDS[i].id == ID_F_PY ? L"python" : L"");
         if (i == 0 && !v[0]) {   /* the folder two up from tools\sheikah-updater */
             wcscpy(v, g_exedir);
             for (int k = 0; k < 2; k++) { wchar_t *s = wcsrchr(v, L'\\'); if (s) *s = 0; }
         }
         SetDlgItemTextW(g_wnd, FIELDS[i].id, v);
     }
-    CheckDlgButton(g_wnd, ID_C_BUILD, GetPrivateProfileIntW(L"settings", L"build", 1, g_ini));
-    CheckDlgButton(g_wnd, ID_C_KEEP, GetPrivateProfileIntW(L"settings", L"keep", 1, g_ini));
+    CheckDlgButton(g_wnd, ID_C_BUILD, st_getint(L"build", 1));
+    CheckDlgButton(g_wnd, ID_C_KEEP, st_getint(L"keep", 1));
 #ifdef PUBLISHER
-    CheckDlgButton(g_wnd, ID_C_PUBLISH, GetPrivateProfileIntW(L"settings", L"publish", 0, g_ini));
-    CheckDlgButton(g_wnd, ID_C_MAIN, GetPrivateProfileIntW(L"settings", L"usemain", 0, g_ini));
+    CheckDlgButton(g_wnd, ID_C_PUBLISH, st_getint(L"publish", 0));
+    CheckDlgButton(g_wnd, ID_C_MAIN, st_getint(L"usemain", 0));
 #endif
 }
 static void save_settings(void) {
     for (int i = 0; i < (int)(sizeof FIELDS / sizeof FIELDS[0]); i++) {
         wchar_t v[MAX_PATH];
         GetDlgItemTextW(g_wnd, FIELDS[i].id, v, MAX_PATH);
-        WritePrivateProfileStringW(L"settings", FIELDS[i].key, v, g_ini);
+        st_put(FIELDS[i].key, v);
     }
     const struct { int id; const wchar_t *k; } c[] = {{ID_C_BUILD, L"build"}, {ID_C_KEEP, L"keep"},
 #ifdef PUBLISHER
         {ID_C_PUBLISH, L"publish"}, {ID_C_MAIN, L"usemain"},
 #endif
     };
-    for (int i = 0; i < (int)(sizeof c / sizeof c[0]); i++) WritePrivateProfileStringW(L"settings", c[i].k, IsDlgButtonChecked(g_wnd, c[i].id) ? L"1" : L"0", g_ini);
+    for (int i = 0; i < (int)(sizeof c / sizeof c[0]); i++) st_put(c[i].k, IsDlgButtonChecked(g_wnd, c[i].id) ? L"1" : L"0");
+    st_save();
 }
 
 static void log_line(const wchar_t *s) {
@@ -343,6 +346,7 @@ static LRESULT CALLBACK proc(HWND w, UINT m, WPARAM wp, LPARAM lp) {
     }
     case WM_COMMAND: {
         const int id = LOWORD(wp);
+        if (HIWORD(wp) == EN_KILLFOCUS) { save_settings(); return 0; }   /* (saved as each field is left, not only at close) */
         if (HIWORD(wp) != BN_CLICKED) return 0;
         if (id >= ID_B_FORK && id <= ID_B_OUT) { browse(FIELDS[id - ID_B_FORK].id); return 0; }
         switch (id) {
@@ -406,7 +410,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show) {
     GetEnvironmentVariableW(L"LOCALAPPDATA", dir, MAX_PATH);
     wcscat(dir, L"\\" APPKEY);
     CreateDirectoryW(dir, NULL);
-    _snwprintf(g_ini, MAX_PATH, L"%ls\\settings.ini", dir);
+    st_init(dir);
     WNDCLASSW wc = {0};
     wc.lpfnWndProc = proc;
     wc.hInstance = inst;
