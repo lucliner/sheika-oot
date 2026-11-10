@@ -7,30 +7,6 @@ Hookshot's own changelog is at https://github.com/NotRexed/Hookshot/releases
 Based on Hookshot v2.0.14. Hookshot's own changes are listed on its releases page: https://github.com/NotRexed/Hookshot/releases
 
 ### What changed in Sheikah Native
-- New: the Sheikah Native logo at the top of the readme
-
-
-## Sheikah Native 2026-11-10
-
-Based on Hookshot v2.0.14. Hookshot's own changes are listed on its releases page: https://github.com/NotRexed/Hookshot/releases
-
-### What changed in Sheikah Native
-- DLSS: the Builder has an optional NVIDIA DLSS SDK folder field. With it the game is built with NVIDIA DLSS Super Resolution (Hookshot's DLSS back end); NVIDIA's SDK files are never shipped, each player fetches them with scripts/ngx_sdk.py
-
-
-## Sheikah Native 2026-11-10
-
-Based on Hookshot v2.0.14. Hookshot's own changes are listed on its releases page: https://github.com/NotRexed/Hookshot/releases
-
-### What changed in Sheikah Native
-- docs: full Sheikah changelog for the first release
-
-
-## Sheikah Native 2026-11-10
-
-Based on Hookshot v2.0.14. Hookshot's own changes are listed on its releases page: https://github.com/NotRexed/Hookshot/releases
-
-### What changed in Sheikah Native
 - Visual live editor: press F2 (or choose Editor in the Insert menu) for a window with four tabs: an item grid with drawn icons (click to give or take, counts for quantities), a map of places to travel to, a time-of-day dial with an age switch, and a searchable board of the game's flags (26,654 entries, about 4,600 with their real names)
 - The editor changes the running game only; it never writes to your save file. It keeps working while the world is paused, and can open and close the pause menu so the HUD lays itself out again after an edit
 - Item icons are the game's own textures, decoded on your PC from your own game files at build time and never shipped; without them the editor draws simple shapes
@@ -42,4 +18,6 @@ Based on Hookshot v2.0.14. Hookshot's own changes are listed on its releases pag
 - New: the game tells the player when Hookshot has a newer release than the one Sheikah is based on, and to contact the developer; it only reads public version information, runs in the background, stays silent offline, and downloads nothing (SHEIKAH_NO_UPSTREAM_CHECK=1 turns it off)
 - New: Sheikah Builder, a small Windows program that builds the game from your own dump, with a progress display and remembered settings
 - New: a changelog for Sheikah only (this one); Hookshot's own changes are on its releases page
-
+- Settings: the Builder remembers your folders between runs and never loses them when it is updated
+- DLSS: the Builder has an optional NVIDIA DLSS SDK folder field. With it the game is built with NVIDIA DLSS Super Resolution (Hookshot's DLSS back end); NVIDIA's SDK files are never shipped, each player fetches them with scripts/ngx_sdk.py
+- New: the Sheikah Native logo at the top of the readme
