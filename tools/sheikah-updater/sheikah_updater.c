@@ -33,8 +33,8 @@
 
 enum { ID_SYNCED = 100, ID_LATEST, ID_BEHIND, ID_STAGE, ID_PROG, ID_LOG,
        ID_CHECK = 110, ID_PREVIEW, ID_UPDATE, ID_BUILDONLY, ID_PUBLISHONLY, ID_OPEN, ID_CANCEL,
-       ID_F_FORK = 130, ID_F_DUMP, ID_F_MINGW, ID_F_CPM, ID_F_WGPU, ID_F_OUT, ID_F_REPO, ID_F_PY,   /* edit fields */
-       ID_B_FORK = 150, ID_B_DUMP, ID_B_MINGW, ID_B_CPM, ID_B_WGPU, ID_B_OUT,                         /* browse buttons */
+       ID_F_FORK = 130, ID_F_DUMP, ID_F_MINGW, ID_F_CPM, ID_F_WGPU, ID_F_OUT, ID_F_REPO, ID_F_PY, ID_F_NGX,   /* edit fields */
+       ID_B_FORK = 150, ID_B_DUMP, ID_B_MINGW, ID_B_CPM, ID_B_WGPU, ID_B_OUT, ID_B_NGX,                         /* browse buttons */
        ID_C_BUILD = 170, ID_C_KEEP, ID_C_PUBLISH, ID_C_MAIN };
 
 static HWND g_wnd, g_log, g_prog, g_stage;
@@ -43,7 +43,7 @@ static volatile LONG g_busy = 0;
 static HANDLE g_proc = NULL;
 
 typedef struct {
-    wchar_t fork[MAX_PATH], dump[MAX_PATH], mingw[MAX_PATH], cpm[MAX_PATH], wgpu[MAX_PATH], out[MAX_PATH], repo[512], py[MAX_PATH];
+    wchar_t fork[MAX_PATH], dump[MAX_PATH], mingw[MAX_PATH], cpm[MAX_PATH], wgpu[MAX_PATH], ngx[MAX_PATH], out[MAX_PATH], repo[512], py[MAX_PATH];
     int build, keep, publish, usemain;
     int op;   /* 0 check, 1 preview, 2 update(+build,+publish), 3 build only, 4 publish only */
 } Job;
@@ -55,6 +55,7 @@ static const struct { int id; const wchar_t *key; const wchar_t *label; int brow
     {ID_F_CPM, L"cpm", L"CPM cache folder", ID_B_CPM},
     {ID_F_WGPU, L"wgpu", L"wgpu-native folder", ID_B_WGPU},
     {ID_F_OUT, L"out", L"Game output folder", ID_B_OUT},
+    {ID_F_NGX, L"ngx", L"NVIDIA DLSS SDK folder (optional: builds the game with DLSS)", ID_B_NGX},
 #ifdef PUBLISHER
     {ID_F_REPO, L"repo", L"Your GitHub repository URL (https://github.com/you/repo.git)", 0},
     {ID_F_PY, L"python", L"Python (leave as python to use the PATH)", 0},
@@ -184,6 +185,7 @@ static DWORD WINAPI job_thread(void *p) {
         _snwprintf(sub, 1024, L"build --dump \"%ls\" --out \"%ls\"%ls%ls%ls%ls", j->dump, j->out, j->keep ? L" --keep" : L"",
                    j->mingw[0] ? L" --mingw \"" : L"", j->mingw[0] ? j->mingw : L"", j->mingw[0] ? L"\"" : L"");
         if (j->cpm[0]) { wcscat(sub, L" --cpm"); q(sub, 1024, j->cpm); }
+        if (j->ngx[0]) { wcscat(sub, L" --ngx"); q(sub, 1024, j->ngx); }
         if (j->wgpu[0]) { wcscat(sub, L" --wgpu"); q(sub, 1024, j->wgpu); }
         core(j, cmd, 4096, sub);
         int c = run_step(cmd, res, 64);
@@ -215,6 +217,7 @@ static void start_job(int op) {
     GetDlgItemTextW(g_wnd, ID_F_MINGW, j->mingw, MAX_PATH);
     GetDlgItemTextW(g_wnd, ID_F_CPM, j->cpm, MAX_PATH);
     GetDlgItemTextW(g_wnd, ID_F_WGPU, j->wgpu, MAX_PATH);
+    GetDlgItemTextW(g_wnd, ID_F_NGX, j->ngx, MAX_PATH);
     GetDlgItemTextW(g_wnd, ID_F_OUT, j->out, MAX_PATH);
     GetDlgItemTextW(g_wnd, ID_F_REPO, j->repo, 512);
     GetDlgItemTextW(g_wnd, ID_F_PY, j->py, MAX_PATH);
@@ -303,10 +306,10 @@ static LRESULT CALLBACK proc(HWND w, UINT m, WPARAM wp, LPARAM lp) {
         mk(L"STATIC", L"(press Check versions)", SS_LEFT, 270, 36, 300, 20, ID_LATEST, 0);
         mk(L"STATIC", L"", SS_LEFT, 580, 36, 260, 20, ID_BEHIND, 0);
         int y = 66;
-        const int nfields = 8;
+        const int nfields = 9;
 #else
         int y = 14;
-        const int nfields = 6;   /* (no GitHub address, no Python field) */
+        const int nfields = 7;   /* (no GitHub address, no Python field) */
 #endif
         for (int i = 0; i < nfields; i++, y += 46) {
             mk(L"STATIC", FIELDS[i].label, 0, 16, y, 700, 18, 0, 0);
@@ -348,7 +351,7 @@ static LRESULT CALLBACK proc(HWND w, UINT m, WPARAM wp, LPARAM lp) {
         const int id = LOWORD(wp);
         if (HIWORD(wp) == EN_KILLFOCUS) { save_settings(); return 0; }   /* (saved as each field is left, not only at close) */
         if (HIWORD(wp) != BN_CLICKED) return 0;
-        if (id >= ID_B_FORK && id <= ID_B_OUT) { browse(FIELDS[id - ID_B_FORK].id); return 0; }
+        if (id >= ID_B_FORK && id <= ID_B_NGX) { browse(FIELDS[id - ID_B_FORK].id); return 0; }
         switch (id) {
 #ifdef PUBLISHER
         case ID_CHECK: start_job(0); break;
@@ -420,9 +423,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show) {
     wc.hIcon = LoadIcon(inst, MAKEINTRESOURCE(1));
     RegisterClassW(&wc);
     #ifdef PUBLISHER
-    RECT r = {0, 0, 852, 770};
+    RECT r = {0, 0, 852, 816};
 #else
-    RECT r = {0, 0, 852, 640};
+    RECT r = {0, 0, 852, 686};
 #endif
     AdjustWindowRect(&r, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
     HWND w = CreateWindowW(APPKEY, APPNAME, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,

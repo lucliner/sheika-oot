@@ -16,7 +16,7 @@ def say(*a):
 
 def cmd_build(a):
     env = dict(os.environ)
-    for k, v in (("HOOKSHOT_MINGW", a.mingw), ("RX_CPM", a.cpm), ("WGPU_NATIVE", a.wgpu)):
+    for k, v in (("HOOKSHOT_MINGW", a.mingw), ("RX_CPM", a.cpm), ("WGPU_NATIVE", a.wgpu), ("HOOKSHOT_NGX_SDK", a.ngx)):
         if v:
             env[k] = v
     if a.keep:
@@ -46,7 +46,7 @@ def main():
     p = sub.add_parser("build")
     for k in ("dump", "out"):
         p.add_argument("--" + k, required=True)
-    for k in ("mingw", "cpm", "wgpu"):
+    for k in ("mingw", "cpm", "wgpu", "ngx"):
         p.add_argument("--" + k, default="")
     p.add_argument("--keep", action="store_true")
     a = ap.parse_args()
