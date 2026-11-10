@@ -1,7 +1,7 @@
 # The upstream notice
 
 Sheikah Native is only as new as the [Hookshot](https://github.com/NotRexed/Hookshot) version it was last merged with, which is
-recorded in `docs/upstream-version.txt` (written by the Sheikah Updater, `tools/sheikah-updater/`). The build bakes it into the
+recorded in `docs/upstream-version.txt` (written by the Sheikah Publisher, `tools/sheikah-updater/`). The build bakes it into the
 game as `SHEIKAH_UPSTREAM` (`nx2/version.py`, `nx2/build.py` -> `host/hos_upstream.c`).
 
 About 8 seconds after the game starts, a background thread (`host/hos_upstream.c`, started from `hos_update_check`) asks GitHub's

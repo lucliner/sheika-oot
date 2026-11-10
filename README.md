@@ -26,7 +26,7 @@ caches, your saves) comes from your game and stays on your PC. Never share those
 - **Upstream notice.** The game checks (in the background, silently offline) whether Hookshot has a newer release than the one
   Sheikah is synced with and tells the player to contact the developer. It never downloads anything. See
   [docs/upstream-notice.md](docs/upstream-notice.md).
-- **Sheikah Updater.** `tools/sheikah-updater/`: a small Windows program that merges a new Hookshot version into this fork,
+- **Sheikah Builder and Publisher.** `tools/sheikah-updater/`: a small Windows program that merges a new Hookshot version into this fork,
   rebuilds the game and publishes it with a generated changelog. See [its readme](tools/sheikah-updater/README.md).
 
 ## Build from source (Windows)

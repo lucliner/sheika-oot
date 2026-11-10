@@ -1,0 +1,2 @@
+# Changes Sheikah Native has had since its last release, one per line starting with '- '. The updater puts them into the
+# changelog and the GitHub release when it publishes, then empties this list. Hookshot's changes do not belong here.

@@ -257,7 +257,7 @@ static int oot_gamedata_set_int(Ctx *c, uint32_t hash, int value) {
 /* hos_oot_stats: the values the editor shows, kept by the game thread; [5] is 1 once they were read */
 static const uint32_t oot_stat_hash[5] = {0xa77921d7u /* CurrentRupee */, 0x31ab5580u /* Life */, 0xfbe01da1u /* MaxLife */,
                                          0x76b18200u /* MP */, 0x12d63a97u /* MPMax */};
-volatile int hos_oot_stats[6];
+volatile int hos_oot_stats[8];   /* [5] 1 once read; [6] 1 when Link is a child, 0 an adult (Sequence_IsChildhood) */
 static volatile struct { uint32_t hash; int value; } gd_int_edits[8];
 static volatile int gd_int_edit_count;
 
@@ -331,6 +331,10 @@ static void oot_stats_tick(Ctx *c) {
         hos_oot_stats[2] = (int)recomp_load32(c, life_obj + 24);
     }
     hos_oot_stats[5] = ok;
+    {
+        int child = 1;
+        if (oot_gamedata_bool(c, 0xcea220d3u, &child)) hos_oot_stats[6] = child;
+    }
     static int logged;
     if (getenv("HOS_GD_TEST") && ++logged % 120 == 0)
         hos_log("editor: stats rupee %d life %d maxlife %d mp %d mpmax %d", hos_oot_stats[0], hos_oot_stats[1], hos_oot_stats[2], hos_oot_stats[3], hos_oot_stats[4]);

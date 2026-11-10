@@ -1,5 +1,5 @@
 /* Sheikah Updater: a small Win32 window that brings Sheikah Native up to a new Hookshot version, rebuilds the game, and publishes
-   the result to the developer's own GitHub repository. The work is done by updater_core.py (beside this exe), which this window
+   the result to the developer's own GitHub repository. The work is done by publisher_core.py or builder_core.py (beside this exe), which this window
    runs and whose output (lines, and @@ markers) it shows. No runtime beyond Windows is needed for the window; Git and Python are
    needed by the work itself (Python is needed by the game's build anyway).
    Build: tools\sheikah-updater\build.ps1 (llvm-mingw). Settings: %LOCALAPPDATA%\SheikahUpdater\settings.ini */
@@ -14,6 +14,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+
+#ifdef PUBLISHER   /* the developer's edition: also merges Hookshot's changes and publishes to GitHub */
+#define APPNAME L"Sheikah Publisher"
+#define APPKEY L"SheikahUpdater"
+#define CORE_PY L"publisher_core.py"
+#else              /* the edition players get: builds the game from their own dump, nothing else, nothing about git */
+#define APPNAME L"Sheikah Builder"
+#define APPKEY L"SheikahBuilder"
+#define CORE_PY L"builder_core.py"
+#endif
 
 #define WM_LOGLINE (WM_APP + 1)   /* lParam: malloc'd wchar_t line */
 #define WM_JOBDONE (WM_APP + 2)
@@ -43,14 +53,18 @@ static const struct { int id; const wchar_t *key; const wchar_t *label; int brow
     {ID_F_CPM, L"cpm", L"CPM cache folder", ID_B_CPM},
     {ID_F_WGPU, L"wgpu", L"wgpu-native folder", ID_B_WGPU},
     {ID_F_OUT, L"out", L"Game output folder", ID_B_OUT},
+#ifdef PUBLISHER
     {ID_F_REPO, L"repo", L"Your GitHub repository URL (https://github.com/you/repo.git)", 0},
     {ID_F_PY, L"python", L"Python (leave as python to use the PATH)", 0},
+#else
+    {ID_F_PY, L"python", L"", 0},
+#endif
 };
 
 static void load_settings(void) {
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < (int)(sizeof FIELDS / sizeof FIELDS[0]); i++) {
         wchar_t v[MAX_PATH];
-        GetPrivateProfileStringW(L"settings", FIELDS[i].key, i == 7 ? L"python" : L"", v, MAX_PATH, g_ini);
+        GetPrivateProfileStringW(L"settings", FIELDS[i].key, FIELDS[i].id == ID_F_PY ? L"python" : L"", v, MAX_PATH, g_ini);
         if (i == 0 && !v[0]) {   /* the folder two up from tools\sheikah-updater */
             wcscpy(v, g_exedir);
             for (int k = 0; k < 2; k++) { wchar_t *s = wcsrchr(v, L'\\'); if (s) *s = 0; }
@@ -59,17 +73,23 @@ static void load_settings(void) {
     }
     CheckDlgButton(g_wnd, ID_C_BUILD, GetPrivateProfileIntW(L"settings", L"build", 1, g_ini));
     CheckDlgButton(g_wnd, ID_C_KEEP, GetPrivateProfileIntW(L"settings", L"keep", 1, g_ini));
+#ifdef PUBLISHER
     CheckDlgButton(g_wnd, ID_C_PUBLISH, GetPrivateProfileIntW(L"settings", L"publish", 0, g_ini));
     CheckDlgButton(g_wnd, ID_C_MAIN, GetPrivateProfileIntW(L"settings", L"usemain", 0, g_ini));
+#endif
 }
 static void save_settings(void) {
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < (int)(sizeof FIELDS / sizeof FIELDS[0]); i++) {
         wchar_t v[MAX_PATH];
         GetDlgItemTextW(g_wnd, FIELDS[i].id, v, MAX_PATH);
         WritePrivateProfileStringW(L"settings", FIELDS[i].key, v, g_ini);
     }
-    const struct { int id; const wchar_t *k; } c[] = {{ID_C_BUILD, L"build"}, {ID_C_KEEP, L"keep"}, {ID_C_PUBLISH, L"publish"}, {ID_C_MAIN, L"usemain"}};
-    for (int i = 0; i < 4; i++) WritePrivateProfileStringW(L"settings", c[i].k, IsDlgButtonChecked(g_wnd, c[i].id) ? L"1" : L"0", g_ini);
+    const struct { int id; const wchar_t *k; } c[] = {{ID_C_BUILD, L"build"}, {ID_C_KEEP, L"keep"},
+#ifdef PUBLISHER
+        {ID_C_PUBLISH, L"publish"}, {ID_C_MAIN, L"usemain"},
+#endif
+    };
+    for (int i = 0; i < (int)(sizeof c / sizeof c[0]); i++) WritePrivateProfileStringW(L"settings", c[i].k, IsDlgButtonChecked(g_wnd, c[i].id) ? L"1" : L"0", g_ini);
 }
 
 static void log_line(const wchar_t *s) {
@@ -95,7 +115,7 @@ static int run_step(const wchar_t *cmdline, wchar_t *result, size_t rcap) {
     free(mut);
     CloseHandle(wr);
     if (!ok) {
-        log_line(L"Could not start the command (is Python / Git installed and on the PATH?)");
+        log_line(L"Could not start the command (is Python installed and on the PATH?)");
         CloseHandle(rd);
         return -1;
     }
@@ -134,13 +154,14 @@ static void q(wchar_t *dst, size_t cap, const wchar_t *s) {   /* append "s" (quo
 }
 
 static void core(const Job *j, wchar_t *cmd, size_t cap, const wchar_t *sub) {
-    _snwprintf(cmd, cap, L"\"%ls\" -I \"%ls\\updater_core.py\" --fork \"%ls\" %ls", j->py, g_exedir, j->fork, sub);
+    _snwprintf(cmd, cap, L"\"%ls\" -I \"%ls\\" CORE_PY L"\" --fork \"%ls\" %ls", j->py, g_exedir, j->fork, sub);
 }
 
 static DWORD WINAPI job_thread(void *p) {
     Job *j = (Job *)p;
     wchar_t cmd[4096], res[64], sub[1024];
     int ok = 1;
+#ifdef PUBLISHER
     if (j->op == 0) {
         core(j, cmd, 4096, L"status");
         run_step(cmd, res, 64);
@@ -155,6 +176,7 @@ static DWORD WINAPI job_thread(void *p) {
         }
         if (ok && !wcscmp(res, L"uptodate") && j->op == 2) log_line(L"Already up to date: continuing with the build.");
     }
+#endif
     if (ok && (j->op == 3 || (j->op == 2 && j->build))) {
         _snwprintf(sub, 1024, L"build --dump \"%ls\" --out \"%ls\"%ls%ls%ls%ls", j->dump, j->out, j->keep ? L" --keep" : L"",
                    j->mingw[0] ? L" --mingw \"" : L"", j->mingw[0] ? j->mingw : L"", j->mingw[0] ? L"\"" : L"");
@@ -164,6 +186,7 @@ static DWORD WINAPI job_thread(void *p) {
         int c = run_step(cmd, res, 64);
         if (c || wcscmp(res, L"built")) ok = 0;
     }
+#ifdef PUBLISHER
     if (ok && (j->op == 4 || (j->op == 2 && j->publish))) {
         if (!j->repo[0]) { log_line(L"No GitHub repository URL is set: nothing published."); ok = 0; }
         else if (SendMessageW(g_wnd, WM_ASKPUBLISH, 0, (LPARAM)j->repo) == IDYES) {
@@ -173,6 +196,7 @@ static DWORD WINAPI job_thread(void *p) {
             if (c || wcscmp(res, L"published")) ok = 0;
         } else log_line(L"Publishing skipped.");
     }
+#endif
     PostMessageW(g_wnd, WM_JOBDONE, ok, 0);
     free(j);
     return 0;
@@ -197,7 +221,7 @@ static void start_job(int op) {
     j->publish = IsDlgButtonChecked(g_wnd, ID_C_PUBLISH);
     j->usemain = IsDlgButtonChecked(g_wnd, ID_C_MAIN);
     if ((op == 3 || (op == 2 && j->build)) && (!j->dump[0] || !j->out[0])) {
-        MessageBoxW(g_wnd, L"Set the game dump folder and the output folder first.", L"Sheikah Updater", MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(g_wnd, L"Set the game dump folder and the output folder first.", APPNAME, MB_OK | MB_ICONINFORMATION);
         g_busy = 0;
         free(j);
         return;
@@ -269,17 +293,24 @@ static LRESULT CALLBACK proc(HWND w, UINT m, WPARAM wp, LPARAM lp) {
     case WM_CREATE: {
         g_wnd = w;
         g_font = CreateFontW(-15, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+#ifdef PUBLISHER
         mk(L"STATIC", L"Sheikah is synced with Hookshot:", 0, 16, 14, 250, 20, 0, 0);
         mk(L"STATIC", L"-", SS_LEFT, 270, 14, 560, 20, ID_SYNCED, 0);
         mk(L"STATIC", L"Latest Hookshot release:", 0, 16, 36, 250, 20, 0, 0);
         mk(L"STATIC", L"(press Check versions)", SS_LEFT, 270, 36, 300, 20, ID_LATEST, 0);
         mk(L"STATIC", L"", SS_LEFT, 580, 36, 260, 20, ID_BEHIND, 0);
         int y = 66;
-        for (int i = 0; i < 8; i++, y += 46) {
+        const int nfields = 8;
+#else
+        int y = 14;
+        const int nfields = 6;   /* (no GitHub address, no Python field) */
+#endif
+        for (int i = 0; i < nfields; i++, y += 46) {
             mk(L"STATIC", FIELDS[i].label, 0, 16, y, 700, 18, 0, 0);
             mk(L"EDIT", L"", ES_AUTOHSCROLL, 16, y + 18, FIELDS[i].browse ? 740 : 820, 22, FIELDS[i].id, WS_EX_CLIENTEDGE);
             if (FIELDS[i].browse) mk(L"BUTTON", L"Browse...", BS_PUSHBUTTON, 762, y + 17, 74, 24, FIELDS[i].browse, 0);
         }
+#ifdef PUBLISHER
         mk(L"BUTTON", L"Build the game after updating", BS_AUTOCHECKBOX, 16, y, 250, 22, ID_C_BUILD, 0);
         mk(L"BUTTON", L"Keep build files (quicker next time, uses lots of disk)", BS_AUTOCHECKBOX, 270, y, 330, 22, ID_C_KEEP, 0);
         mk(L"BUTTON", L"Publish to my GitHub", BS_AUTOCHECKBOX, 610, y, 220, 22, ID_C_PUBLISH, 0);
@@ -293,6 +324,13 @@ static LRESULT CALLBACK proc(HWND w, UINT m, WPARAM wp, LPARAM lp) {
         mk(L"BUTTON", L"Publish only", BS_PUSHBUTTON, 548, y, 100, 30, ID_PUBLISHONLY, 0);
         mk(L"BUTTON", L"Open game folder", BS_PUSHBUTTON, 656, y, 110, 30, ID_OPEN, 0);
         mk(L"BUTTON", L"Cancel", BS_PUSHBUTTON, 774, y, 62, 30, ID_CANCEL, 0);
+#else
+        mk(L"BUTTON", L"Keep build files (quicker next time, uses lots of disk)", BS_AUTOCHECKBOX, 16, y, 420, 22, ID_C_KEEP, 0);
+        y += 32;
+        mk(L"BUTTON", L"Build the game", BS_DEFPUSHBUTTON, 16, y, 160, 32, ID_BUILDONLY, 0);
+        mk(L"BUTTON", L"Open game folder", BS_PUSHBUTTON, 184, y, 140, 32, ID_OPEN, 0);
+        mk(L"BUTTON", L"Cancel", BS_PUSHBUTTON, 774, y, 62, 32, ID_CANCEL, 0);
+#endif
         EnableWindow(GetDlgItem(w, ID_CANCEL), FALSE);
         y += 40;
         g_stage = mk(L"STATIC", L"Ready.", SS_LEFT, 16, y, 820, 20, ID_STAGE, 0);
@@ -308,14 +346,18 @@ static LRESULT CALLBACK proc(HWND w, UINT m, WPARAM wp, LPARAM lp) {
         if (HIWORD(wp) != BN_CLICKED) return 0;
         if (id >= ID_B_FORK && id <= ID_B_OUT) { browse(FIELDS[id - ID_B_FORK].id); return 0; }
         switch (id) {
+#ifdef PUBLISHER
         case ID_CHECK: start_job(0); break;
         case ID_PREVIEW: start_job(1); break;
         case ID_UPDATE:
             if (MessageBoxW(w, L"Merge the newest Hookshot into Sheikah now, and then build and publish as ticked? Changed files are backed up first, and nothing is changed if a file conflicts.",
-                            L"Sheikah Updater", MB_YESNO | MB_ICONQUESTION) == IDYES) start_job(2);
+                            APPNAME, MB_YESNO | MB_ICONQUESTION) == IDYES) start_job(2);
             break;
+#endif
         case ID_BUILDONLY: start_job(3); break;
+#ifdef PUBLISHER
         case ID_PUBLISHONLY: start_job(4); break;
+#endif
         case ID_OPEN: {
             wchar_t p[MAX_PATH];
             GetDlgItemTextW(w, ID_F_OUT, p, MAX_PATH);
@@ -329,11 +371,13 @@ static LRESULT CALLBACK proc(HWND w, UINT m, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_LOGLINE: append_log((wchar_t *)lp); free((void *)lp); return 0;
+#ifdef PUBLISHER
     case WM_ASKPUBLISH: {
         wchar_t t[900];
         _snwprintf(t, 900, L"Publish Sheikah Native to your GitHub repository?\n\n%ls\n\nThe source changes and a generated changelog are pushed. Game files are never included (the updater refuses if it sees any).", (wchar_t *)lp);
         return MessageBoxW(w, t, L"Publish to GitHub", MB_YESNO | MB_ICONQUESTION);
     }
+#endif
     case WM_JOBDONE:
         g_busy = 0;
         EnableWindow(GetDlgItem(w, ID_CANCEL), FALSE);
@@ -341,7 +385,7 @@ static LRESULT CALLBACK proc(HWND w, UINT m, WPARAM wp, LPARAM lp) {
         if (wp) SendMessageW(g_prog, PBM_SETPOS, 1000, 0);
         return 0;
     case WM_CLOSE:
-        if (g_busy && MessageBoxW(w, L"A job is still running. Close anyway?", L"Sheikah Updater", MB_YESNO | MB_ICONWARNING) != IDYES) return 0;
+        if (g_busy && MessageBoxW(w, L"A job is still running. Close anyway?", APPNAME, MB_YESNO | MB_ICONWARNING) != IDYES) return 0;
         save_settings();
         DestroyWindow(w);
         return 0;
@@ -360,7 +404,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show) {
     *wcsrchr(g_exedir, L'\\') = 0;
     wchar_t dir[MAX_PATH];
     GetEnvironmentVariableW(L"LOCALAPPDATA", dir, MAX_PATH);
-    wcscat(dir, L"\\SheikahUpdater");
+    wcscat(dir, L"\\" APPKEY);
     CreateDirectoryW(dir, NULL);
     _snwprintf(g_ini, MAX_PATH, L"%ls\\settings.ini", dir);
     WNDCLASSW wc = {0};
@@ -368,12 +412,16 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show) {
     wc.hInstance = inst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-    wc.lpszClassName = L"SheikahUpdater";
+    wc.lpszClassName = APPKEY;
     wc.hIcon = LoadIcon(inst, MAKEINTRESOURCE(1));
     RegisterClassW(&wc);
+    #ifdef PUBLISHER
     RECT r = {0, 0, 852, 770};
+#else
+    RECT r = {0, 0, 852, 640};
+#endif
     AdjustWindowRect(&r, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
-    HWND w = CreateWindowW(L"SheikahUpdater", L"Sheikah Updater", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+    HWND w = CreateWindowW(APPKEY, APPNAME, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                            CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, NULL, NULL, inst, NULL);
     ShowWindow(w, show);
     MSG msg;

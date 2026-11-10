@@ -37,3 +37,7 @@ build-linux/
 
 # ---- NVIDIA's DLSS SDK (scripts/ngx_sdk.py): NVIDIA's files, never committed ----
 ngx-sdk/
+
+# ---- the developer-only publisher (not part of the public repository) ----
+tools/sheikah-updater/publisher_core.py
+tools/sheikah-updater/Sheikah-Publisher.exe

@@ -547,7 +547,7 @@ enum { TAB_ITEMS, TAB_LINK, TAB_MAP, TAB_WORLD, TAB_FLAGS, TABS };
 static const char *const tab_names[TABS] = {"Items", "Link", "Map", "World", "Flags"};
 enum { H_TAB = 1, H_ITEM, H_PLACE, H_AGE, H_HOUR, H_FLAG, H_KIND, H_SEARCH, H_HEART, H_STAT, H_MPBAR, H_SEC, H_NONE };
 static int mouse_x;
-extern volatile int hos_oot_stats[6];   /* host/oot_live_editor.inc: rupees, life, max life, magic, max magic, valid */
+extern volatile int hos_oot_stats[8];   /* host/oot_live_editor.inc: rupees, life, max life, magic, max magic, valid */
 void hos_stat_set(int which, int value);
 typedef struct { RECT r; int kind, arg; } Hit;
 #define HITS_MAX 1024
@@ -1129,13 +1129,24 @@ static void do_click(int kind, int arg, int button, int shift) {
             post_action(OOT_CHEAT_ITEM_ACTION + arg * 256 + 200);
         }
         break;
-    case H_PLACE:
+    case H_PLACE: {
+        /* A dungeon is made for one age: loaded as the other, the game builds an incomplete level (missing surfaces). The editor
+           travels as Link's current age, so it says so first */
+        const int adult_only = arg == 22 || arg == 23 || arg == 24 || arg == 25 || arg == 26 || arg == 28 || arg == 29 || arg == 30;
+        const int child_only = arg == 19 || arg == 20 || arg == 21;
+        if (game_alive() && hos_oot_stats[5] && ((adult_only && hos_oot_stats[6]) || (child_only && !hos_oot_stats[6]))) {
+            char t[140];
+            snprintf(t, sizeof t, "%s is %s's: switch age on the World tab first.", places[arg].name, adult_only ? "an adult" : "a child");
+            say_toast(t);
+            break;
+        }
         if (post_action(1000 + arg)) {
             char t[96];
             snprintf(t, sizeof t, "Traveling to %s...", places[arg].name);
             say_toast(t);
         }
         break;
+    }
     case H_SEC: item_sec = arg; scroll_y[TAB_ITEMS] = 0; break;
     case H_NONE: break;
     case H_HEART: link_click(kind, arg, button); break;

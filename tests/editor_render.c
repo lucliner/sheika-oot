@@ -12,7 +12,7 @@ volatile int hos_oot_live_action;
 volatile int hos_oot_item_counts[256];
 int hos_editor_game_alive(void) { return 1; }
 DWORD hos_game_path_a(char *buf, DWORD cap) { (void)buf, (void)cap; return 0; }   /* (SHEIKAH_ICON_DIR names the icons' folder instead) */
-volatile int hos_oot_stats[6] = {137, 22, 40, 300, 480, 1};
+volatile int hos_oot_stats[8] = {137, 22, 40, 300, 480, 1, 1, 0};
 void hos_stat_set(int which, int value) { (void)which, (void)value; }
 
 /* a few flag names, from a tsv (hash, kind, default, name) when given */
