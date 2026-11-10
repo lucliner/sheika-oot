@@ -410,7 +410,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show) {
     GetModuleFileNameW(NULL, g_exedir, MAX_PATH);
     *wcsrchr(g_exedir, L'\\') = 0;
     wchar_t dir[MAX_PATH];
-    GetEnvironmentVariableW(L"LOCALAPPDATA", dir, MAX_PATH);
+    /* (the settings live in the user's own folder, not in AppData: a program started from a packaged app such as the Claude desktop
+       app sees a private copy of AppData, so a file saved there from one place was not the file read from another) */
+    GetEnvironmentVariableW(L"USERPROFILE", dir, MAX_PATH);
+    wcscat(dir, L"\\.sheikah");
+    CreateDirectoryW(dir, NULL);
     wcscat(dir, L"\\" APPKEY);
     CreateDirectoryW(dir, NULL);
     st_init(dir);

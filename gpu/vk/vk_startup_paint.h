@@ -1,4 +1,4 @@
-// (sheikah) The start-up screen's picture (vk_menu.cpp draws it, vk_main.cpp says what is in it): the Sheikah Native wordmark and
+﻿// (sheikah) The start-up screen's picture (vk_menu.cpp draws it, vk_main.cpp says what is in it): the Sheikah Native wordmark and
 // the build's version, then what the start is doing: a step, a title with its percentage, a rounded bar, the count and the time
 // left, and a hint. Plain GDI (on Linux host/posix/gdi_posix.c), nothing else: tests/test_startup_progress.py and the offline
 // render in it include this file on its own.
@@ -16,7 +16,7 @@
 
 namespace mkwvk {
 
-constexpr int kLogoH = 112;                        // (the logo's height at 720 lines)
+constexpr int kLogoH = 250;                        // (the logo's height at 720 lines: the wide Sheikah Native logo, assets/sheikah-logo.png)
 constexpr int kStartupW = 640, kStartupH = 280 + kLogoH + 16;   // (the panel at 720 lines; it scales with the window)
 
 /// The panel's scale in percent for a w x h window: by the height (100 at 720 lines, 150 at 1080, 200 at 1440), never wider
@@ -78,7 +78,7 @@ inline void spaced(HDC dc, const std::string& t, int x, int y, int gap, bool cen
 }
 } // namespace startup_gdi
 
-/// The logo (assets/sheikah.png, nx2/logo_rgba.py) into a 32-bit top-down DIB of width w: lh pixels tall, centred on cx, its
+/// The logo (assets/sheikah-logo.png, nx2/logo_rgba.py) into a 32-bit top-down DIB of width w: lh pixels tall, centred on cx, its
 /// top at y, blended by its alpha over what is there; bilinear
 inline void blit_logo(uint32_t* bits, int w, int h, int cx, int y, int lh) {
 #ifdef HOOKSHOT_LOGO
@@ -133,11 +133,16 @@ inline void paint_startup_view(HDC dc, uint32_t w, uint32_t h, int pct, const St
     GdiFlush();
     blit_logo(bits, (int)w, (int)h, cx, 0, S(kLogoH));
     SetTextColor(dc, ink);
-    spaced(dc, "HOOKSHOT", cx, Y(0), S(7), true);
+#ifdef HOOKSHOT_LOGO
+    const int version_y = 6;   // (the logo says the name itself)
+#else
+    spaced(dc, "SHEIKAH NATIVE", cx, Y(0), S(5), true);   // (no logo in this build: the name as text)
+    const int version_y = 56;
+#endif
     SelectObject(dc, ver);
     SetTextColor(dc, dim);
     SetTextAlign(dc, TA_CENTER | TA_TOP);
-    TextOutA(dc, cx, Y(56), v.version.c_str(), (int)v.version.size());
+    TextOutA(dc, cx, Y(version_y), v.version.c_str(), (int)v.version.size());
     if (!v.title.empty() && v.fraction < 0) {   // (no count: the title and its line centred, the step above)
         if (!v.step.empty()) {
             SelectObject(dc, step);
