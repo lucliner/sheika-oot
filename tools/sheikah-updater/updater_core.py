@@ -480,6 +480,10 @@ def cmd_publish(a):
     say("pushing to %s (%s) ..." % (a.remote, a.branch))
     p = git(["push", "-u", "origin", "HEAD:" + a.branch, "--quiet"], cwd=fork, check=False)
     if p.returncode:
+        err = p.stderr.decode("utf-8", "replace")
+        if "prompt" in err or "Authentication" in err or "Username" in err:
+            raise SystemExit("GitHub sign-in is needed once. Open a terminal and run:  git -C \"%s\" push -u origin %s\n"
+                             "Sign in when Git asks (a browser window opens); Git remembers it, and the updater can push from then on." % (fork, a.branch))
         raise SystemExit("push failed: %s\nIf the repository already has other history, make it empty or pull it first." %
                          p.stderr.decode("utf-8", "replace").strip())
     git(["push", "origin", tag], cwd=fork, check=False)
