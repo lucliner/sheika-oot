@@ -21,7 +21,9 @@
 #include "gpu_choice.h"
 #include "vk_menu.h"
 #include "vk_dlss.h"
+#include "vk_fsr4.h"
 #include "vk_reflex.h"
+#include "vk_antilag.h"
 #include "vk_progress.h"
 
 namespace vkx {
@@ -221,9 +223,30 @@ bool create_device() {
         flag = has_extension(exts, name);
         if (flag) want.push_back(name);
     };
-    // (RX_VK_FORCE_MESH_FALLBACK=1, a test: mesh shaders not used where they are, so the no-mesh fallback the GTX 10xx and RX 5000
-    // cards run (issue 640) can be tried on any GPU)
-    if (getenv("RX_VK_FORCE_MESH_FALLBACK") && atoi(getenv("RX_VK_FORCE_MESH_FALLBACK")) != 0) dev.mesh_shader = false;
+    // (the Graphics tab's Mesh shaders row, mesh_shaders= in sheikah_options.ini, #1001: 0 Automatic (native where there are mesh
+    // shaders, the compute fallback where not and for the task + mesh draws of the cards below), 1 Native (no fallback where
+    // there are mesh shaders), 2 Compute (the fallback on every GPU). RX_VK_FORCE_MESH_FALLBACK=1, a test, is Compute over it:
+    // mesh shaders not used where they are, so the no-mesh fallback the GTX 10xx and RX 5000 cards run (issue 640) can be tried
+    // on any GPU)
+    static const int mesh_mode = [] {
+        char exe[MAX_PATH];
+        const DWORD len = game_module_path(exe, MAX_PATH);   // (the game folder, not bin beside the launcher: vk_paths.h)
+        std::string ini(exe, len);
+        ini = ini.substr(0, ini.find_last_of("\\/") + 1) + "sheikah_options.ini";
+        int v = 0;
+        if (FILE* fl = fopen(ini.c_str(), "r")) {
+            char line[80];
+            while (fgets(line, sizeof line, fl))
+                if (!strncmp(line, "mesh_shaders=", 13)) {
+                    v = atoi(line + 13);
+                    break;
+                }
+            fclose(fl);
+        }
+        if (const char* e = getenv("RX_VK_FORCE_MESH_FALLBACK")) v = atoi(e) != 0 ? 2 : v;
+        return v >= 0 && v <= 2 ? v : 0;
+    }();
+    if (mesh_mode == 2) dev.mesh_shader = false;
     else optional(VK_EXT_MESH_SHADER_EXTENSION_NAME, dev.mesh_shader);
     optional(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME, dev.external_memory_host);
     optional(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME, dev.external_memory_fd);   // (guest memory as udmabufs: vk_memory.cpp import_dma_buf)
@@ -253,8 +276,12 @@ bool create_device() {
         optional(VK_AMD_BUFFER_MARKER_EXTENSION_NAME, dev.buffer_marker);
     optional(VK_EXT_DEVICE_FAULT_EXTENSION_NAME, dev.device_fault);
     optional(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME, dev.coop_matrix);
+    optional(VK_KHR_SWAPCHAIN_MUTABLE_FORMAT_EXTENSION_NAME, dev.swap_mutable);   // (sheikah: the overlays, vk_imgui.cpp)
     dlss_device_extensions(want, exts);   // (sheikah: NVIDIA DLSS's, vk_dlss.cpp)
+    bool fsr_descriptor_buffer = false;   // (sheikah, linux: only with a Vulkan FSR 4 library beside the game, vk_fsr4.cpp)
+    if (fsr4_wants_descriptor_buffer()) optional(VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME, fsr_descriptor_buffer);
     reflex_device_extensions(want, exts);   // (sheikah: NVIDIA Reflex's, vk_reflex.cpp)
+    antilag_device_extensions(want, exts);   // (sheikah: AMD Anti-Lag 2's, vk_antilag.cpp)
 
     // the queue: one family for graphics, compute and transfer
     vkGetPhysicalDeviceQueueFamilyProperties(dev.physical, &n, nullptr);
@@ -334,8 +361,12 @@ bool create_device() {
     if (dev.view_2d_of_3d) *tail = &v2d3d, tail = &v2d3d.pNext;
     VkPhysicalDeviceCooperativeMatrixFeaturesKHR coop{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
     if (dev.coop_matrix) *tail = &coop, tail = &coop.pNext;
+    VkPhysicalDeviceDescriptorBufferFeaturesEXT descriptor_buffer{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_FEATURES_EXT};
+    if (fsr_descriptor_buffer) *tail = &descriptor_buffer, tail = &descriptor_buffer.pNext;
     reflex_device_features(tail);   // (present ids, when NVIDIA Reflex's extensions are there)
+    antilag_device_features(tail);   // (AMD Anti-Lag 2's, when its extension is there)
     vkGetPhysicalDeviceFeatures2(dev.physical, &f);
+    descriptor_buffer.descriptorBufferCaptureReplay = VK_FALSE;
     dev.view_2d_of_3d = dev.view_2d_of_3d && v2d3d.sampler2DViewOf3D;
     coop.cooperativeMatrixRobustBufferAccess = VK_FALSE;
     dev.coop_matrix = dev.coop_matrix && coop.cooperativeMatrix &&
@@ -390,7 +421,9 @@ bool create_device() {
     {   // (sheikah, after TotK Recomp's vk_caps.c) NVN's programs are written for 32 lanes: the translator is told 32, and the lane
         // shuffles of OoT's networks and the lane masks of its mesh programs depend on it. NVIDIA's GPUs have no other size; AMD's
         // default to 64 where they like, and the networks' output came out as coloured noise (Sheikah Native issues 10 and 14)
+        VkPhysicalDeviceDriverProperties drv{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
         VkPhysicalDeviceSubgroupSizeControlProperties sc{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES};
+        sc.pNext = &drv;
         VkPhysicalDeviceSubgroupProperties sg{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES};
         sg.pNext = &sc;
         VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
@@ -398,6 +431,9 @@ bool create_device() {
         vkGetPhysicalDeviceProperties2(dev.physical, &p2);
         const bool pin = f13.subgroupSizeControl && sc.minSubgroupSize <= 32 && sc.maxSubgroupSize >= 32 && !getenv("RX_VK_NO_SUBGROUP_PIN");
         dev.sg32_stages = pin ? sc.requiredSubgroupSizeStages : 0;
+        dev.subgroup_size = sg.subgroupSize;
+        dev.subgroup_max = sc.maxSubgroupSize > sg.subgroupSize ? sc.maxSubgroupSize : sg.subgroupSize;
+        dev.driver_id = drv.driverID;
         logf("vk: subgroups: default %u lanes, %u-%u, pinned to 32 on stages %#x", sg.subgroupSize, sc.minSubgroupSize, sc.maxSubgroupSize,
              (unsigned)dev.sg32_stages);
     }
@@ -407,10 +443,25 @@ bool create_device() {
     }
     mesh.multiviewMeshShader = mesh.primitiveFragmentShadingRateMeshShader = VK_FALSE;   // (not used)
     dev.mesh_shader = dev.mesh_shader && mesh.meshShader && mesh.taskShader;
+    // (task and mesh shader counts in pipeline statistics, a feature of their own: RADV has it off on RDNA2, and a query
+    // pool made with those counts all the same can hang the GPU)
+    dev.mesh_queries = dev.mesh_shader && mesh.meshShaderQueries;
     // (sheikah, issue 640) RDNA1 and older GPUs: no mesh shaders, but task and mesh programs run as compute shaders
     // that write their vertices to buffers, drawn through an ordinary graphics pipeline. It needs buffer device addresses.
     dev.mesh_fallback = !dev.mesh_shader && f12.bufferDeviceAddress && !getenv("RX_VK_NO_MESH_FALLBACK");
     if (dev.mesh_fallback) logf("vk: no mesh shaders: task and mesh programs run as compute shaders (issue 640 fallback)");
+    bool task_mesh_fallback = false;
+#ifdef _WIN32
+    // Navi 22 can time out on task + mesh draws in the AMD Windows driver (issue 996).
+    task_mesh_fallback = dev.props.vendorID == 0x1002 && dev.props.deviceID == 0x73df;
+#endif
+    if (mesh_mode == 1) task_mesh_fallback = false;   // (Native: the card's own mesh shaders for every draw)
+    if (const char* e = getenv("RX_VK_TASK_MESH_FALLBACK")) task_mesh_fallback = atoi(e) != 0;
+    dev.task_mesh_fallback = task_mesh_fallback && dev.mesh_shader && f12.bufferDeviceAddress && !getenv("RX_VK_NO_MESH_FALLBACK");
+    if (dev.task_mesh_fallback) logf("vk: task + mesh programs use the compute fallback (RX_VK_TASK_MESH_FALLBACK=0: native)");
+    logf("vk: mesh shaders row: %s (%s)", mesh_mode == 2 ? "Compute" : mesh_mode == 1 ? "Native" : "Automatic",
+         dev.mesh_shader ? (dev.task_mesh_fallback ? "native, task + mesh draws on the compute path" : "native")
+                         : dev.mesh_fallback ? "the compute path" : "none");
     if (robust) logf("vk: robust buffer access %s", robust_ok ? "on" : "not supported");
     f.features.robustBufferAccess = robust_ok ? VK_TRUE : VK_FALSE;   // (off by default: the game's accesses stay in their buffers)
     dev.features = f.features;
@@ -437,6 +488,7 @@ bool create_device() {
     if (dev.buffer_marker) buffer_markers_init();
     coopmat_init();
     reflex_device_created();
+    antilag_device_created();
     if (dev.push_descriptor) {
         VkPhysicalDevicePushDescriptorPropertiesKHR pp{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PUSH_DESCRIPTOR_PROPERTIES_KHR};
         VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
@@ -448,6 +500,38 @@ bool create_device() {
 }
 
 } // namespace
+
+/// (sheikah) The UNORM format of an sRGB one (the same bytes, read and written as they are), else the format itself
+VkFormat unorm_of(VkFormat f) {
+    switch (f) {
+    case VK_FORMAT_B8G8R8A8_SRGB: return VK_FORMAT_B8G8R8A8_UNORM;
+    case VK_FORMAT_R8G8B8A8_SRGB: return VK_FORMAT_R8G8B8A8_UNORM;
+    case VK_FORMAT_A8B8G8R8_SRGB_PACK32: return VK_FORMAT_A8B8G8R8_UNORM_PACK32;
+    default: return f;
+    }
+}
+/// (sheikah) The views of the swapchain's images let go (before the swapchain they view: the device idle already)
+void swap_views_drop() {
+    for (auto view : dev.swap_views)
+        if (view) vkDestroyImageView(dev.device, view, nullptr);
+    dev.swap_views.clear();
+}
+/// (sheikah) A view of each of the swapchain's images, for Dear ImGui's overlays (vk_imgui.cpp), when they can be drawn into,
+/// in the format given (the swapchain's, or its UNORM one when the swapchain was made mutable)
+void swap_views_make(VkImageUsageFlags usage, VkFormat format) {
+    swap_views_drop();
+    dev.swap_views.assign(dev.swap_images.size(), VK_NULL_HANDLE);
+    dev.swap_view_format = format;
+    if (!(usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)) return;
+    for (size_t i = 0; i < dev.swap_images.size(); i++) {
+        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vi.image = dev.swap_images[i];
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = format;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(dev.device, &vi, nullptr, &dev.swap_views[i]) != VK_SUCCESS) dev.swap_views[i] = VK_NULL_HANDLE;
+    }
+}
 
 bool create_swapchain(uint32_t width, uint32_t height) {
     VkSurfaceCapabilitiesKHR caps;
@@ -540,6 +624,9 @@ bool create_swapchain(uint32_t width, uint32_t height) {
     // The renderer copies into swapchain images. Readback is optional and only available on surfaces that allow it.
     if (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)
         ci.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    // (sheikah) the overlays Dear ImGui draws (vk_imgui.cpp) render into it. Every surface allows it (the Vulkan spec)
+    if (caps.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+        ci.imageUsage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     ci.preTransform = caps.currentTransform;
     ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     if (!(caps.supportedCompositeAlpha & ci.compositeAlpha)) {
@@ -557,6 +644,18 @@ bool create_swapchain(uint32_t width, uint32_t height) {
     }
     ci.clipped = VK_TRUE;
     ci.oldSwapchain = dev.swapchain;
+    // (sheikah) an sRGB swapchain (some drivers list no UNORM format) made mutable when the driver can: the overlays draw
+    // through UNORM views, their colours as they are, as on a UNORM swapchain. Without it, vk_imgui.cpp makes them linear
+    const VkFormat view_formats[2] = {fmt.format, unorm_of(fmt.format)};
+    VkImageFormatListCreateInfo format_list{VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO};
+    const bool mutable_view = dev.swap_mutable && view_formats[1] != fmt.format && (ci.imageUsage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+    if (mutable_view) {
+        ci.flags |= VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR;
+        format_list.viewFormatCount = 2;
+        format_list.pViewFormats = view_formats;
+        format_list.pNext = ci.pNext;
+        ci.pNext = &format_list;
+    }
     reflex_swapchain_info(ci);   // (NVIDIA Reflex: latency mode on)
     VkSwapchainKHR sc;
     result = vkCreateSwapchainKHR(dev.device, &ci, nullptr, &sc);
@@ -564,11 +663,13 @@ bool create_swapchain(uint32_t width, uint32_t height) {
     if (dev.swapchain) {
         device_wait_idle_locked();   // (the present queue's presents of the old swapchain done too)
         reflex_swapchain_destroyed();   // (no latency sleep or markers may use the destroyed chain)
+        swap_views_drop();   // (sheikah: the overlays' views of its images, before it)
         for (auto semaphore : dev.swap_rendered) vkDestroySemaphore(dev.device, semaphore, nullptr);
         vkDestroySwapchainKHR(dev.device, dev.swapchain, nullptr);
         dev.swapchain = VK_NULL_HANDLE;
         dev.swap_rendered.clear();
         dev.swap_images.clear();
+        dev.swap_spare = 0;
     }
     if (result != VK_SUCCESS) {
         logf("vk: vkCreateSwapchainKHR failed (VkResult %d, extent %ux%u, format %d, usage %#x, mode %d, images %u)",
@@ -600,8 +701,10 @@ bool create_swapchain(uint32_t width, uint32_t height) {
     dev.swap_format = fmt.format;
     dev.swap_extent = {width, height};
     dev.swap_images = std::move(images);
+    dev.swap_spare = n > caps.minImageCount ? n - caps.minImageCount : 0;
     logf("vk: swapchain %ux%u, %u images, %s", width, height, n,
          mode == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox" : mode == VK_PRESENT_MODE_IMMEDIATE_KHR ? "immediate" : "fifo");
+    swap_views_make(ci.imageUsage, mutable_view ? view_formats[1] : fmt.format);
     reflex_swapchain_created(sc);   // (NVIDIA Reflex: its sleep mode on the new swapchain)
     return true;
 }
@@ -627,6 +730,9 @@ std::string skipped_path() {
 // of it before the window shows anything (and a console with the count on Windows)
 std::atomic<int> prep_stage{0};   // 0 the programs, 1 the pipelines the notes predict (a first start), 2 the noted pipelines
 std::atomic<size_t> prep_done{0}, prep_total{0};
+// (the parts' guesses before they run, and the parts that do not run: the one bar's total, PrepareBar)
+std::atomic<size_t> prep_guess[3]{};
+std::atomic<bool> prep_skip[3]{};
 std::atomic<bool> prep_running{false}, prep_finished{false};
 HANDLE prep_ended = nullptr;
 #ifndef _WIN32
@@ -657,11 +763,20 @@ void prepare_with_screen() {
     prep_running.store(true);
     std::thread worker([] {
         const bool update = prepare_is_update();   // (an update, RX_VK_PREPARE_BACKGROUND=1: what the notes name now, the rest in play)
+        {
+            size_t guess[3];
+            prepare_guess(guess);
+            for (int k = 0; k < 3; k++) prep_guess[k].store(guess[k]);
+        }
+        if (update) prep_skip[0].store(true), prep_skip[1].store(true);
         const bool prepared = !update && prepare_run(prep_progress, false);
+        if (!prepared) prep_skip[0].store(true);
         if (prepared && !prepare_stopped()) {   // (a first start only: the pipelines the notes predict, into the driver's cache)
             prep_done.store(0), prep_total.store(0);
             prep_stage.store(1);
             predict_run(prep_progress);
+        } else {
+            prep_skip[1].store(true);
         }
         if (!prepare_stopped()) {
             prep_done.store(0), prep_total.store(0);
@@ -680,8 +795,8 @@ void prepare_with_screen() {
     static std::atomic<bool> paint_stop{false};
     HANDLE painted = CreateEventA(nullptr, TRUE, FALSE, nullptr);
     std::thread painter([t0, painted] {
-        ProgressClock eta;
-        int eta_stage = -1;
+        ProgressClock eta;   // (over the whole bar: its units, PrepareBar)
+        PrepareBar bar;
         double next_log = 10;
         bool prepared = false;   // (this start prepares the programs: a first start after an update, two steps)
         uint32_t last_w = dev.swap_extent.width, last_h = dev.swap_extent.height;
@@ -690,18 +805,26 @@ void prepare_with_screen() {
             const double secs = std::chrono::duration<double>(clock::now() - t0).count();
             const int stage = prep_stage.load();
             const size_t done = prep_done.load(std::memory_order_relaxed), total = prep_total.load(std::memory_order_relaxed);
-            if (stage != eta_stage) eta.reset(), eta_stage = stage;
-            if (total) eta.note(secs, done, total);
-            const double left = total ? eta.left() : -1;
+            for (int k = 0; k < 3; k++) {
+                bar.guess(k, prep_guess[k].load(std::memory_order_relaxed));
+                if (prep_skip[k].load(std::memory_order_relaxed)) bar.skip(k);
+            }
+            if (total) bar.at(stage, done, total);
+            else bar.reach(stage);
+            if (finished) bar.finish();
+            const double whole = bar.fraction();
+            eta.note(secs, (size_t)(bar.units_done() * 100), (size_t)(bar.units_total() * 100));
+            const double left = eta.left();
             if (secs >= next_log && total) {
-                logf("vk: start-up: %s %zu of %zu%s%s", stage == 2 ? "pipelines" : stage ? "predicted pipelines" : "shaders", done, total, left >= 0 ? ", " : "",
-                     left_text(left).c_str());
+                logf("vk: start-up: %s %zu of %zu, %.0f%% of all%s%s", stage == 2 ? "pipelines" : stage ? "predicted pipelines" : "shaders", done,
+                     total, whole * 100, left >= 0 ? ", " : "", left_text(left).c_str());
                 next_log = secs + 10;
             }
             if (stage == 0 && total) prepared = true;
             StartupState st;
             st.stage = stage, st.done = done, st.total = total, st.left = left, st.secs = secs;
             st.prepared = prepared, st.finished = finished, st.stopping = prepare_stopped();
+            st.whole = whole;
             const StartupView view = startup_view(st);
             startup_screen(&view);
             uint32_t w, h;
@@ -713,6 +836,21 @@ void prepare_with_screen() {
             if (w && h) present_image(nullptr, dev.swap_extent.width, dev.swap_extent.height, nullptr);
             if (finished || paint_stop.load()) break;
             Sleep(33);
+        }
+        // (the end: a fade to black over 0.4 s, so the game's first frame comes out of black, not cut in over the screen; none
+        // after a screen of under 1.5 s, a blink, or when the window is not shown (paint_stop: its presents wait))
+        const double shown = std::chrono::duration<double>(clock::now() - t0).count();
+        if (shown >= 1.5 && !paint_stop.load()) {
+            const auto f0 = clock::now();
+            for (;;) {
+                const double f = std::chrono::duration<double>(clock::now() - f0).count() / 0.4;
+                startup_fade_to((float)std::min(f, 1.0));
+                uint32_t w, h;
+                window_size(&w, &h);
+                if (w && h) present_image(nullptr, dev.swap_extent.width, dev.swap_extent.height, nullptr);
+                if (f >= 1 || paint_stop.load()) break;
+                Sleep(8);
+            }
         }
         SetEvent(painted);
     });
@@ -728,9 +866,10 @@ void prepare_with_screen() {
         if (WaitForSingleObject(prep_ended, 33) == WAIT_OBJECT_0) break;
     }
     worker.join();
-    paint_stop.store(true);
-    if (WaitForSingleObject(painted, 1000) == WAIT_OBJECT_0) painter.join();
-    else {   // (its present waits for the window to be seen: the game's own presents will, too)
+    // (the painter ends by itself once the work is finished, after its fade; it is told to stop only when it has not by then)
+    if (WaitForSingleObject(painted, 1500) == WAIT_OBJECT_0) painter.join();
+    else {
+        paint_stop.store(true);   // (its present waits for the window to be seen: the game's own presents will, too)
         logf("vk: start-up: the window is not being shown; the game starts without waiting for it");
         painter.detach();
     }
@@ -742,13 +881,15 @@ bool started_up() {
     if (const char* e = getenv("RX_VK_START_DELAY")) Sleep((DWORD)atoi(e) * 1000);   // (diagnosis: a long start, as the first one is)
     if (!replay_start()) return false;
     if (prepare_only()) {
-        // (three parts: the programs, the pipelines the notes predict, then those they name; most of the time is the first)
+        // (three parts: the programs, the pipelines the notes predict, then those they name, on one bar whose total has all three
+        // from the start: PrepareBar. The fixed shares it had (70%, 20%, 10%) kept the predicted pipelines' minutes in a fifth)
         static int part;
+        static PrepareBar bar;
         const auto progress = [](size_t done, size_t total) {
-            static size_t last = ~(size_t)0;
+            static int last = -1;
             if (!total) return;
-            static const size_t from[3] = {0, 700, 900}, span[3] = {700, 200, 100};
-            const size_t at = from[part] + done * span[part] / total;
+            bar.at(part, done, total);
+            const int at = (int)(bar.fraction() * 1000);
             if (at == last) return;
             last = at;
             printf("@@progress %.3f\n", at / 1000.0);
@@ -756,11 +897,18 @@ bool started_up() {
         };
         printf("@@stage shaders Preparing shaders\n");
         fflush(stdout);
+        {
+            size_t guess[3];
+            prepare_guess(guess);
+            for (int k = 0; k < 3; k++) bar.guess(k, guess[k]);
+        }
         part = 0;
         const bool prepared = prepare_run(progress, false);
+        if (!prepared) bar.skip(0), bar.skip(1);
         part = 1;
         if (prepared) predict_run(progress);
         part = 2;
+        bar.reach(2);
         precompile_run(progress);
         pipeline_cache_save(true);
         remove(skipped_path().c_str());
@@ -843,7 +991,9 @@ int start(void* hwnd) {
         dev.swap_extent = {1920, 1080};
         dev.swap_format = VK_FORMAT_R8G8B8A8_UNORM;
         logf("vk: no window: presents render offscreen (%ux%u)", dev.swap_extent.width, dev.swap_extent.height);
-        return started_up() ? 1 : 0;
+        if (!started_up()) return 0;
+        pipeline_cache_play();   // (play begins: what is made from now on goes into the play files)
+        return 1;
     }
 #ifdef _WIN32
     VkWin32SurfaceCreateInfoKHR si{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
@@ -890,6 +1040,7 @@ int start(void* hwnd) {
         logf("vk: renderer startup failed after window and swapchain initialization");
         return 0;
     }
+    pipeline_cache_play();   // (play begins: what is made from now on goes into the play files)
     return 1;
 }
 
@@ -922,6 +1073,7 @@ __attribute__((visibility("default")))
 #endif
 void mkwvk_close_asked(void) {
     using namespace mkwvk;
+    pipeline_cache_close();   // (in play: the pipelines made since the last save, kept for the next start)
     if (!prep_running.load() || prepare_stopped()) return;
     logf("vk: the window was closed while the shaders were prepared: stopping, what is done is kept");
     prepare_stop();

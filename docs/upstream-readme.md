@@ -154,6 +154,19 @@ with `--update <game folder>`.
 
 </details>
 
+### Latest development build
+
+Want a fix before it is in a release? The
+[latest development build](https://github.com/NotRexed/Hookshot/releases/tag/nightly) is made from `main` after every
+change, with the same files as a release. It is untested and may break your saves or settings: copy them first (see
+above).
+
+- **Windows:** download `HookshotBuilder.exe` from it and start it from a terminal as `HookshotBuilder.exe --tag nightly`
+  (without `--tag nightly` it installs the latest release instead).
+- **Linux:** download `Hookshot-<version>-x86_64.AppImage` from it and use it as above.
+
+To go back, install the [latest release](https://github.com/NotRexed/Hookshot/releases/latest) the usual way.
+
 ### Where the files go
 
 - The build reads your game and never changes it. It writes to the folder you choose and to the builder's own folder:
@@ -183,6 +196,7 @@ with `--update <game folder>`.
 | Steam Deck: the game freezes and closes in Kokiri Forest or the Great Deku Tree (`gfx_0.0.0 timeout` in `journalctl -k`) | `RX_VK_MESH_NOCULL=2c56dc1006942f74` in `hookshot_env.txt` gets past it with every model drawn (the culling pass that runs for seconds is turned off). `RX_VK_SKIP_CODE=2c56dc1006942f74` also gets past it, but the models those draws make go missing (see the [development guide](docs/development.md#switches-for-testing-and-debugging), [#817](https://github.com/NotRexed/Hookshot/issues/817)) |
 | "Your antivirus removed part of the build tools" | A false alarm on unsigned programs. Restore the files from Windows Security's Protection history, or add `%LOCALAPPDATA%\HookshotBuilder` to its exclusions, then press **Repair** |
 | Stutter the first time you see something | Normal for now: shaders are being prepared. It gets better when you pass through the same place again |
+| Windows, NVIDIA: stutter every start in places you have seen, after the shaders were prepared | The driver's shader cache is too small to keep them all (the first start builds about 2 GB of pipelines into it). In the NVIDIA Control Panel, Manage 3D settings, set **Shader Cache Size** to **Unlimited** (or 10 GB). On Linux the game raises the driver's limit itself |
 | The game is in the wrong language | Change the code in `language.txt` in the game folder. The file lists them all |
 
 If the problem continues, [report it](https://github.com/NotRexed/Hookshot/issues/new/choose) with the version, where
@@ -277,7 +291,7 @@ HDR peak brightness show only while HDR is on.
 | | Mute in background | Off, On | Off |
 | | Audio output | Auto, Stereo, 5.1 (after a restart) | Auto |
 | Gameplay | FPS counter | Off, On | Off |
-| | Menu size | Auto, Small, Medium, Large | Auto |
+| | Menu size | Small, Medium, Large | Medium |
 | | Game speed | Per frame, Real time | Real time |
 | | Text speed | Normal, 2x, 4x, Instant | Normal |
 | | Text size | Original, 110%, 125%, 150%, 175% (dialogue, Navi and signs) | Original |
@@ -300,8 +314,8 @@ HDR peak brightness show only while HDR is on.
   and the video memory limits for a card with that much memory. It leaves the Upscaler and Frame generation as
   you chose them: with DLSS, FSR 3.1 or FSR 4, the preset's resolution becomes their nearest mode. Changing most other
   rows yourself sets it back to Custom.
-- **Menu size** is how large the menu, the FPS counter and the start-up screen are drawn. Auto is Large in fullscreen on a
-  screen of 1080 lines or more while you use a controller (a TV across the room), else Medium.
+- **Menu size** is how large the menu, the FPS counter and the start-up screen are drawn: Medium unless you choose Small
+  (a desk) or Large (a TV across the room). It stays the same whether you use a controller or the keyboard and mouse.
 - **GPU device** matters on a PC with more than one graphics card (a laptop's integrated and dedicated GPUs, or a
   second card for Lossless Scaling). Auto prefers a dedicated one, and only cards with Vulkan 1.3 are listed.
   `hookshot_log.txt` lists every card as `vk: device <n>`; `RX_VK_DEVICE=<n>` chooses one for a single run and wins

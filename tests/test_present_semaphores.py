@@ -15,9 +15,15 @@ a = p.parse_args()
 source = a.source.resolve()
 main = (source/'gpu/vk/vk_main.cpp').read_text()
 replay = (source/'gpu/vk/vk_replay.cpp').read_text()
-present = replay[replay.index('void present_image('):replay.index('void present_image(')+12000]
+start = replay.index('void present_image(')
+# Read the complete top-level function; capture dependencies can grow its text.
+present = replay[start:replay.index('\n}', start) + 2]
+# (present ahead, #1702: the present itself is present_image's end, present_out, which present_commit also runs; its wait
+# is read from there, the complete function as above)
+out_start = replay.index('static void present_out(uint32_t index, std::unique_lock<std::mutex>& qk) {')
+present_out = replay[out_start:replay.index('\n}', out_start) + 2]
 signal = re.search(r'    signal\.semaphore = [^;]+;', present)[0]
-wait = re.search(r'    pi\.pWaitSemaphores = [^;]+;', present)[0]
+wait = re.search(r'    pi\.pWaitSemaphores = [^;]+;', present_out)[0]
 acquire_wait = re.search(r'    waits\[0\]\.semaphore = [^;]+;', present)[0]
 assert 'acquire_timeout, f.acquired, VK_NULL_HANDLE, &index)' in present
 # Include the actual creation attempt: passing oldSwapchain retires it even on failure.
@@ -42,16 +48,22 @@ constexpr int VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO=1, VK_SUCCESS=0;
 constexpr int VK_PRESENT_MODE_MAILBOX_KHR=1, VK_PRESENT_MODE_IMMEDIATE_KHR=2;
 struct VkSemaphoreCreateInfo { int type; };
 struct Extent { uint32_t width,height; };
-struct Device { int device=1;uint64_t swapchain=0;int swap_format=0;Extent swap_extent{};
+struct Device { int device=1;uint64_t swapchain=0;int swap_format=0;Extent swap_extent{};bool swap_mutable=false;uint32_t swap_spare=0;
     std::vector<VkImage> swap_images;std::vector<VkSemaphore> swap_rendered;
     std::atomic<uint64_t> swap_resize{0};std::mutex present_mu; } dev;
-struct { int hdr=0; } opts;
+struct { int hdr=0; } opts;   // (the Insert menu's HDR row: present_image remakes the swapchain when it changes)
 unsigned image_count=4, made=0, fail_at=0;uint64_t serial=1000;
 int query_result=0,data_result=0;uint64_t destroyed_swapchain=0;
 bool idle=false, bad_destroy=false; std::set<uint64_t> live,used;
 std::set<uint64_t> chains, retired;
 uint64_t next_chain=0;int create_result=0;bool bad_chain=false;
-struct CreateInfo {uint64_t oldSwapchain=0;unsigned imageUsage=1,minImageCount=4;};
+struct CreateInfo {uint64_t oldSwapchain=0;unsigned imageUsage=1,minImageCount=4,flags=0;const void* pNext=nullptr;};
+// (sheikah: the overlays' mutable sRGB swapchain, vk_main.cpp: its format list, never used by these formats)
+using VkFormat=int;
+constexpr int VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO=2, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT=16,
+    VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR=4;
+struct VkImageFormatListCreateInfo {int sType;const void* pNext=nullptr;uint32_t viewFormatCount=0;const VkFormat* pViewFormats=nullptr;};
+VkFormat unorm_of(VkFormat f) {return f;}
 void reflex_swapchain_info(CreateInfo&) {}
 struct Reflex {uint64_t swapchain=0,swapchain_generation=0;bool latency=false,frame_marked=false;int mode=-1;std::mutex mu;} cached;
 Reflex& rx(){return cached;}
@@ -84,8 +96,10 @@ void queue_flush_locked() {}
 void vkDeviceWaitIdle(int) {idle=true;}
 // (vk_replay.cpp's helper: held submits out, then the device idle; the real one also takes the present queue's own lock)
 void device_wait_idle_locked() {queue_flush_locked();vkDeviceWaitIdle(dev.device);}
+void swap_views_drop() {}   // (sheikah: the overlays' views, vk_main.cpp)
 bool recreate() {
     uint32_t n=0,width=640,height=480; struct {int format=1;} fmt;
+    struct {uint32_t minImageCount=2;} caps;   // (the surface's: present ahead holds images past it, vk_framegen.cpp)
     CreateInfo ci;int mode=0;VkResult result;
 ''' + tail + r'''
     reflex_swapchain_created(sc);
@@ -133,13 +147,16 @@ int main() {
         pending[count]=sem;owner[count++]=image;
     }
     if(dev.swap_rendered.size()!=4 || live.size()!=4)return 4;
+    if(dev.swap_spare!=2) {std::puts("FAIL: 4 images over a minimum of 2 should leave 2 to hold at once");return 29;}
     auto old=dev.swap_rendered;image_count=2;idle=false;
     if(!recreate() || bad_destroy || dev.swap_rendered.size()!=2 || live.size()!=2)return 5;
+    if(dev.swap_spare!=0) {std::puts("FAIL: 2 images over a minimum of 2 leave none to hold at once");return 30;}
     for(auto s:old)if(live.count(s))return 6;
     for(unsigned slot=0;slot<3;++slot)for(unsigned image=0;image<2;++image)
         if(choose(image,slot)!=dev.swap_rendered[image])return 9;
     image_count=5;idle=false;
     if(!recreate() || bad_destroy || dev.swap_rendered.size()!=5 || live.size()!=5)return 10;
+    if(dev.swap_spare!=3)return 31;
     for(unsigned image=0;image<5;++image)if(choose(image,image%3)!=dev.swap_rendered[image])return 11;
     // Once creation has been attempted, the old chain cannot be acquired or used as oldSwapchain again.
     image_count=4;made=0;fail_at=3;
@@ -157,6 +174,7 @@ int main() {
     if(recreate() || dev.swapchain || !live.empty() || !chains.empty()) {
         std::puts("FAIL: retired swapchain remains published after creation failure");return 15;
     }
+    if(dev.swap_spare) {std::puts("FAIL: images to spare still counted with no swapchain");return 32;}
     create_result=0;
     if(!recreate() || !dev.swapchain || dev.swap_images.size()!=4)return 16;
     data_result=1; // VK_INCOMPLETE from the image-data query must not publish a partial chain.

@@ -10,6 +10,7 @@
                 HOS_NVN_CONTINUE=1 (go on past nvnBootstrapLoader). */
 #include "hos.h"
 #include "hos_paths.h"
+#include "hos_wide_size.h"   /* (the widescreen picture's size, shared with the Insert menu) */
 #include "../gpu/vk/vk_api.h"
 #include "../gpu/vk/oot_cheat_items.h"
 #include <math.h>
@@ -366,8 +367,18 @@ static int env_line_allowed(const char *name, const char *value) {
     /* (sheikah) the switches that name a file to write or a folder take no value here, not even a bare name: one
        resolves in the game's folder (HOS_SAMPLE_FILE=sheikah_vk.dll emptied the renderer) */
     const size_t nl = strlen(name);
-    const int names_file = (nl > 5 && (!strcmp(name + nl - 5, "_FILE") || !strcmp(name + nl - 4, "_DIR"))) ||
-                           !strcmp(name, "RX_VK_FRAME_LOG") || !strcmp(name, "HOS_PRESENT_TRACE");
+    int names_file = (nl > 5 && (!strcmp(name + nl - 5, "_FILE") || !strcmp(name + nl - 4, "_DIR"))) ||
+                     !strcmp(name, "RX_VK_FRAME_LOG") || !strcmp(name, "HOS_PRESENT_TRACE");
+    /* (sheikah) and the test switches whose value is a file or folder under another name (HOS_AUDIO_DUMP=image.bin
+       overwrote the game's image), or that press buttons and menu keys on a timer (a shared file erased a save from
+       the file select) */
+    static const char *const by_name[] = {
+        "HOS_AUDIO_DUMP", "HOS_AUDIO_WB_DUMP", "HOS_SHADER_DUMP", "HOS_FS_OVERLAY", "HOS_MODS", "HOS_INPUT_LIVE",
+        "HOS_INPUT_SCRIPT", "HOS_SAMPLE_ALL", "HOS_WATCH", "HOOKSHOT_BUILDER_HOME", "RX_VK_SHOTS", "RX_VK_SHOT_GO",
+        "RX_VK_FRAMELOG", "RX_VK_HANG_DUMP", "RX_VK_DUMP", "RX_VK_DUMP_SPV", "RX_VK_DUMP_MESH_SPV", "RX_VK_DUMP_STAGES",
+        "RX_VK_DUMP_FAILED", "RX_VK_IR", "RX_VK_MENU_SCRIPT", "RX_DUMP_WGSL", "RX_DUMP_SLOW_WGSL", "RX_DUMP_TICS",
+        "RX_WGSL_OVERRIDE"};
+    for (size_t i = 0; i < sizeof by_name / sizeof *by_name; i++) names_file |= !strcmp(name, by_name[i]);
     /* RX_VK_DLSS_DIR: a folder on this PC, not a share (\\server\x or //server/x) or a device path */
     if (!strcmp(name, "RX_VK_DLSS_DIR"))
         return !((value[0] == '\\' || value[0] == '/') && (value[1] == '\\' || value[1] == '/'));
@@ -428,6 +439,27 @@ int hos_oot_is_player(Ctx *c, uint64_t actor) {
     return resource && recomp_load32(c, resource + 88) == 0x79616c50 &&
            recomp_load16(c, resource + 92) == 0x7265 &&
            recomp_load8(c, resource + 94) == 0;
+}
+
+/* Movement speed (the Debug tab's row): Link's character controller and the row's percent, as oot_player_speed saw them on
+   his last update (0: none, or 1x) */
+static uint64_t oot_speed_controller;
+static int oot_speed_percent = 100;
+
+/* A character controller's forward speed being set (nx2/oot_patches.py patch_cct_speed: s0, in metres a second, or a frame when
+   per_second is 0): Link's scaled by the row while it is above 1x and the player steers him (a scene's walk, as the one into a
+   map, keeps its pace), the physics step moving him by it with its collisions. Only speeds up to 15 m/s (his run is 4.5): a ledge
+   climb sets some 55 for a frame, and scaled it threw him past the ledge. Every other controller as it is. */
+void hos_oot_cct_speed(Ctx *c, uint64_t controller, int per_second) {
+    if (!controller || controller != __atomic_load_n(&oot_speed_controller, __ATOMIC_RELAXED)) return;
+    const int percent = __atomic_load_n(&oot_speed_percent, __ATOMIC_RELAXED);
+    int hos_move_stick_held(void);   /* host/nn_hid.c */
+    if (percent <= 100 || percent > 400 || !hos_move_stick_held()) return;
+    float speed;
+    memcpy(&speed, &c->vreg[0][0], sizeof speed);
+    if (!(fabsf(speed) * (per_second ? 1.0f : 60.0f) <= 15.0f)) return;   /* (and NaN) */
+    speed *= percent / 100.0f;
+    memcpy(&c->vreg[0][0], &speed, sizeof speed);
 }
 
 #if defined(_WIN32) || defined(__linux__)   /* (the debug tools: host/posix has what they call) */
@@ -502,6 +534,7 @@ static const unsigned char oot_item_kinds[] = {OOT_CHEAT_ITEMS(OOT_NO_SECTION, O
 _Static_assert(sizeof oot_item_names / sizeof oot_item_names[0] <= 256, "hos_oot_item_counts is too small for the item list");
 
 static int oot_item_count(Ctx *c, const char *name);
+static int oot_gamedata_bool(Ctx *c, uint32_t hash, int *value);
 static char oot_verify_name[64];   /* (the item last edited: its count is logged on the next refreshes, once the game's event has run) */
 static int oot_verify_left;
 
@@ -511,14 +544,20 @@ static void oot_inventory_refresh(Ctx *c, int64_t now) {
     static int probed;
     if (now < next) return;
     next = now + 500000000LL;
+    int loaded = 0;   /* (a save's counts read: the first item's is not -1) */
     for (unsigned i = 0; i < OOT_ITEM_COUNT; i++) {
         const int count = oot_item_count(c, oot_item_names[i]);
+        if (!i) loaded = count >= 0;
         rx_option_set(OOT_CHEAT_ITEM_BASE + (int)i, count);
-        hos_oot_item_counts[i] = count;
+        hos_oot_item_counts[i] = count;   /* (sheikah: the editor window's copy) */
     }
-    if (oot_verify_left > 0 && oot_verify_name[0]) {
+    if (oot_verify_left > 0 && oot_verify_name[0]) {   /* (sheikah) */
         hos_log("cheats: inventory %s is now %d", oot_verify_name, oot_item_count(c, oot_verify_name));
         oot_verify_left--;
+    }
+    {   /* Link's age for the Debug tab's Switch age row: 0 child, 1 adult, -1 no save loaded (Sequence_IsChildhood) */
+        int child = 1;
+        rx_option_set(OOT_CHEAT_AGE_ID, loaded && oot_gamedata_bool(c, 0xcea220d3u, &child) ? (child ? 0 : 1) : -1);
     }
     if (!probed && oot_pouch_count(c, "Item_DekuSeed") >= 0) {
         probed = 1;   /* (one line naming every count, both spellings: which names the pouch knows) */
@@ -952,6 +991,32 @@ int hos_editor_game_alive(void) {
     return (seen && now - seen < 2000000000LL) || (idle && now - idle < 1000000000LL);
 }
 
+/* Link's controller (vtable 0x84c54f10, the one OneShotPhysicsCctChangePosition moves) from his components, 0 when the chain
+   is not there */
+static uint64_t oot_player_controller(Ctx *c, uint64_t components) {
+    const unsigned offsets[] = {80, 32, 16, 8};
+    uint64_t controller = components;
+    for (unsigned i = 0; i < sizeof offsets / sizeof offsets[0]; i++) {
+        controller = recomp_load64(c, controller + offsets[i]);
+        if (!controller) return 0;
+    }
+    return recomp_load64(c, controller) == 0x84c54f10ULL ? controller : 0;
+}
+
+/* Movement speed (the Debug tab's row, HOS_OPT_CHEAT_SPEED in percent): Link's controller and the percent for
+   hos_oot_cct_speed, which scales the forward speed the game sets on it. (The controller's speed rate beside it, +476, is no
+   use: the game sets it again before each step.) */
+static void oot_player_speed(Ctx *c, uint64_t components) {
+    int rx_option(int id, int otherwise);
+    static int logged = 100;
+    int percent = rx_option(HOS_OPT_CHEAT_SPEED, 100);
+    if (percent < 100 || percent > 400) percent = 100;
+    __atomic_store_n(&oot_speed_controller, percent > 100 ? oot_player_controller(c, components) : 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&oot_speed_percent, percent, __ATOMIC_RELAXED);
+    if (percent != logged) hos_log("cheats: movement speed %d%%", percent);
+    logged = percent;
+}
+
 static void oot_update_player_cheats(Ctx *c, uint64_t actor, uint64_t components) {
     int rx_option(int id, int otherwise);
     static uint64_t flying_actor, marked_actor, marked_controller;
@@ -969,6 +1034,7 @@ static void oot_update_player_cheats(Ctx *c, uint64_t actor, uint64_t components
     oot_inventory_refresh(c, now);
     oot_last_player = recomp_load64(c, components + 800) - 0x1d50;
     oot_gd_tick(c, oot_last_player);   /* (sheikah: the player actor, as hos_oot_lift_player finds it) the live editor's shown rows and queued edits */
+    oot_player_speed(c, components);
     if (action >= OOT_CHEAT_ITEM_ACTION && action < OOT_CHEAT_ITEM_ACTION + 256 * (int)OOT_ITEM_COUNT) {
         oot_inventory_edit(c, action);
     } else if (action == OOT_AGE_ACTION) {
@@ -983,14 +1049,8 @@ static void oot_update_player_cheats(Ctx *c, uint64_t actor, uint64_t components
     if (!flying && action != 2 && action != 3) return;
 
     // Follow OneShotPhysicsCctChangePosition to Link's controller.
-    const unsigned offsets[] = {80, 32, 16, 8};
-    uint64_t controller = components;
-    for (unsigned i = 0; i < sizeof offsets / sizeof offsets[0]; i++) {
-        controller = recomp_load64(c, controller + offsets[i]);
-        if (!controller) return;
-    }
-    const uint64_t vtable = recomp_load64(c, controller);
-    if (vtable != 0x84c54f10ULL || recomp_load64(c, vtable + 0xe8) != 0x806d2530ULL) return;
+    const uint64_t controller = oot_player_controller(c, components);
+    if (!controller || recomp_load64(c, 0x84c54f10ULL + 0xe8) != 0x806d2530ULL) return;
     A64Fn change_position = a64_lookup(0x806d2530ULL);
     if (!change_position) return;
 
@@ -1255,6 +1315,7 @@ volatile uint64_t hos_wide_out, hos_wide_scene;
 volatile int hos_native_scene;
 volatile int hos_fix_res;   /* (nx2/oot_native_resolution.py's cached-scale refresh: HOS_FIX_RES=1; #849's fixed-scale patch does it by default) */
 volatile float hos_wide_ratio, hos_wide_squeeze, hos_wide_margin;
+volatile uint32_t hos_wide_keep_mask = 0xf;   /* (nx2/oot_wide.py KEEP_VTABLES: the screens that keep the whole picture, a bit each; MkwVkHost.wide_menus) */
 /* (nx2/oot_occlusion.py) read by the game's code where it decides to make occlusion queries: 1, none (HOOKSHOT_OCCLUSION_OFF=1) */
 volatile int hos_occlusion_off;
 static void occlusion_switch(void) {
@@ -1524,17 +1585,12 @@ static int game_main(int argc, char **argv) {
            cameras take its ratio, and the HUD fills its width instead of a middle 16:9 wider than the screen. A 4:3 CRT
            at the 1440 output: picture 1920 x 1440, scene 1440 x 1080, HUD 100%) */
         if (want > game * 1.01 || (want > 1.0f && want < game * 0.99)) {
-            double r = want > 32.0 / 9.0 ? 32.0 / 9.0 : want < 5.0 / 4.0 ? 5.0 / 4.0 : want;
+            const double r = hos_wide_clamp(want);
             uint32_t hos_output_size(int height);   /* (host/nn_applet.c: the Output resolution's height, 1440 as shipped) */
-            unsigned oh = hos_output_size(1), ow = (unsigned)(oh * r / 8 + 0.5) * 8;   /* (whole multiples of 8 pixels) */
-            /* (at most 3840 x 2160's pixels, the shape kept: the game's render targets come from a pool sized for its picture
-               (host/nn_applet.c hos_rt_pool_size), and a 32:9 screen at the 4K output made a 7680 x 2160 one. Its pool at the
-               output's size ran out as Kokiri Forest loaded (a null pointer, issue 1031); a pool for the whole picture, 1.4 GB,
-               failed the game's own reservation at boot. 5400 x 1520 there, more than the 5120 x 1440 screens it was seen on) */
-            if ((double)ow * oh > 3840.0 * 2160.0) {
-                oh = (unsigned)(sqrt(3840.0 * 2160.0 / r) / 8) * 8;
-                ow = (unsigned)(oh * r / 8) * 8;
-            }
+            /* (the height kept, the width at the screen's ratio, at most 3840 x 2160's pixels with the shape kept:
+               host/hos_wide_size.h, which the Insert menu's Output and Render resolution rows share; issue 1031) */
+            unsigned ow, oh;
+            hos_wide_size(hos_output_size(1), r, hos_wide_max_px(), &ow, &oh);
             const unsigned sh = oh * 3 / 4, sw = (unsigned)(ow * 0.75 / 8 + 0.5) * 8;   /* (the scene, 3/4 of the picture as shipped) */
             hos_wide_out = (uint64_t)oh << 32 | ow;
             hos_wide_scene = (uint64_t)sh << 32 | sw;
@@ -1598,10 +1654,21 @@ static DWORD WINAPI game_thread(void *p) {
     (void)p;
     ExitProcess((UINT)game_main(game_argc, game_argv));
 }
+/* (sheikah, linux) Room in the drivers' own shader caches for what the preparation builds. The pipelines the notes predict (~43,000
+   in OoT, vk_draw.cpp predict_run) are built into the driver's disk cache alone, not into mkw_vk_pipelines.bin, which is read in whole
+   at every start. NVIDIA's cache holds 1 GiB by default and cleans itself down to that as it is written: a full preparation filled
+   it to the limit (1026 MB) and the pipelines it dropped were compiled again in play. Mesa's (RADV, ANV) has the same 1 GiB default.
+   Raised for this process only, before anything loads Vulkan; a value the player set (or sheikah_env.txt) is kept. Windows: the
+   NVIDIA driver takes its size from the control panel's Shader Cache Size, which a program cannot set (readme) */
+static void driver_cache_room(void) {
+    setenv("__GL_SHADER_DISK_CACHE_SIZE", "10737418240", 0);   /* (10 GiB, bytes) */
+    setenv("MESA_SHADER_CACHE_MAX_SIZE", "10G", 0);
+}
 int main(int argc, char **argv) {
     int hos_display_init(void);
     void hos_display_loop(void);
     load_sheikah_env();
+    driver_cache_room();
     game_argc = argc, game_argv = argv;
     int prepare_shaders = 0;
     for (int i = 1; i < argc; i++) {

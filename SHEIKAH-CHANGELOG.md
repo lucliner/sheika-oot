@@ -4,7 +4,7 @@ Hookshot's own changelog is at https://github.com/NotRexed/Hookshot/releases
 
 ## Sheikah Native 2026-11-10
 
-Based on Hookshot v2.0.14. Hookshot's own changes are listed on its releases page: https://github.com/NotRexed/Hookshot/releases
+Based on Hookshot v2.1.0-rc.1. Hookshot's own changes are listed on its releases page: https://github.com/NotRexed/Hookshot/releases
 
 ### What changed in Sheikah Native
 - Visual live editor: press F2 (or choose Editor in the Insert menu) for a window with four tabs: an item grid with drawn icons (click to give or take, counts for quantities), a map of places to travel to, a time-of-day dial with an age switch, and a searchable board of the game's flags (26,654 entries, about 4,600 with their real names)
