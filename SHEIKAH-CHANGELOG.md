@@ -2,6 +2,18 @@
 
 Hookshot's own changelog is at https://github.com/NotRexed/Hookshot/releases
 
+## Sheikah Native 2026-11-13
+
+Based on Hookshot v2.1.0. Hookshot's own changes are listed on its releases page: https://github.com/NotRexed/Hookshot/releases
+
+### What changed in Sheikah Native
+- Updated to Hookshot v2.1.0 (from v2.1.0-rc.1): shader recompiler and texture fixes, new pipeline-state tests and an AMD pipeline-state file; merged with no conflicts
+- Updater: fetching upstream no longer fails when Hookshot moves its nightly tag
+- Asset swap tool: updated model-replacement tools (tools/assetswap)
+- Frame generation: tuned the interpolation shaders to reduce artefacts around fast motion
+- Sync with Hookshot v2.1.0; asset swap tool; frame generation tweaks
+
+
 ## Sheikah Native 2026-11-10
 
 Based on Hookshot v2.1.0-rc.1. Hookshot's own changes are listed on its releases page: https://github.com/NotRexed/Hookshot/releases
