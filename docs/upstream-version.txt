@@ -1,6 +1,6 @@
 # The upstream Hookshot version this Sheikah Native is synced with. Written by tools/sheikah-updater; the build bakes it
 # into the game (nx2/version.py), which checks upstream for something newer. Do not edit by hand.
-commit=7de763db6b3b1ec21afc4ce9d378fc135c12aa6d
-describe=v2.1.0-rc.1
+commit=8ef84611049f4fc31835a0b12793cf074ed49c3c
+describe=v2.1.0
 date=2026-11-11
-synced=2026-11-10
+synced=2026-11-13

@@ -121,7 +121,7 @@ def test_obj_and_autoskin():
 
     # a made-up skeleton: a thigh and a shin stacked on y; points near each take that bone
     class B:
-        def __init__(s, i, n, p, sm): s.index, s.name, s.parent, s.smooth = i, n, p, sm
+        def __init__(s, i, n, p, sm): s.index, s.name, s.parent, s.smooth, s.matrix = i, n, p, sm, sm
     class F:
         bones = [B(0, 'Waist', -1, 7), B(1, 'Leg_1_L', 0, 8), B(2, 'Leg_2_L', 1, 9), B(3, 'Ankle_L', 2, 10)]
     W = [np.eye(4) for _ in range(4)]
@@ -137,7 +137,139 @@ def test_obj_and_autoskin():
     check(abs(sc - 0.5) < 1e-9 and abs(t[1]) < 1e-9, 'fit: scale to the target height, feet on the ground')
 
 
+def make_glb():
+    """A one-triangle GLB with a two-joint skin (joint 1 is a child of joint 0, one metre up)."""
+    import json
+    pos = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], '<f4')
+    uv = np.array([[0, 0], [1, 0], [0, 1]], '<f4')
+    jn = np.array([[0, 1, 0, 0]] * 3, '<u1')
+    wt = np.array([[0.75, 0.25, 0, 0]] * 3, '<f4')
+    ib = np.array([np.eye(4), np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, -1, 0, 1]])], '<f4')   # column-major
+    idx = np.array([0, 1, 2], '<u2')
+    parts = [pos.tobytes(), uv.tobytes(), jn.tobytes(), wt.tobytes(), ib.tobytes(), idx.tobytes() + b'\0\0']
+    views, off = [], 0
+    for p in parts:
+        views.append({'buffer': 0, 'byteOffset': off, 'byteLength': len(p)})
+        off += len(p)
+    acc = [{'bufferView': 0, 'componentType': 5126, 'count': 3, 'type': 'VEC3'},
+           {'bufferView': 1, 'componentType': 5126, 'count': 3, 'type': 'VEC2'},
+           {'bufferView': 2, 'componentType': 5121, 'count': 3, 'type': 'VEC4'},
+           {'bufferView': 3, 'componentType': 5126, 'count': 3, 'type': 'VEC4'},
+           {'bufferView': 4, 'componentType': 5126, 'count': 2, 'type': 'MAT4'},
+           {'bufferView': 5, 'componentType': 5123, 'count': 3, 'type': 'SCALAR'}]
+    doc = {'asset': {'version': '2.0'}, 'buffers': [{'byteLength': off}], 'bufferViews': views, 'accessors': acc,
+           'nodes': [{'name': 'Hips', 'children': [1]}, {'name': 'Spine', 'translation': [0, 1, 0]}, {'name': 'M', 'mesh': 0, 'skin': 0}],
+           'skins': [{'joints': [0, 1], 'inverseBindMatrices': 4}],
+           'meshes': [{'primitives': [{'attributes': {'POSITION': 0, 'TEXCOORD_0': 1, 'JOINTS_0': 2, 'WEIGHTS_0': 3}, 'indices': 5}]}]}
+    js = json.dumps(doc).encode()
+    js += b' ' * (-len(js) % 4)
+    binc = b''.join(parts)
+    binc += b'\0' * (-len(binc) % 4)
+    total = 12 + 8 + len(js) + 8 + len(binc)
+    return (b'glTF' + struct.pack('<II', 2, total) + struct.pack('<II', len(js), 0x4E4F534A) + js
+            + struct.pack('<II', len(binc), 0x004E4942) + binc)
+
+
+def test_gltf_and_retarget():
+    import tempfile
+    import gltf_io
+    import retarget
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, 'm.glb')
+        open(p, 'wb').write(make_glb())
+        meshes, rig = gltf_io.load_gltf(p, d)
+    check(len(meshes) == 1 and len(meshes[0].pos) == 3 and len(meshes[0].tris) == 1, 'glb: one triangle')
+    check(rig.names == ['Hips', 'Spine'] and rig.parents == [-1, 0], 'glb: joints and parents: %r' % (rig.parents,))
+    check(np.allclose(rig.position(1), [0, 1, 0]), 'glb: rest position of a joint comes from the inverse bind matrix')
+    check(np.allclose(meshes[0].weights[0][:2], [0.75, 0.25]) and meshes[0].joints.shape == (3, 4), 'glb: skin weights')
+    check(meshes[0].uv is not None and abs(meshes[0].uv[2, 1] - 0.0) < 1e-6, 'glb: v is flipped to the OBJ convention')
+
+    # name matching: MMD, Mixamo and Blender-style names land on the game's bone names
+    class B:
+        def __init__(s, n, sm=1): s.name, s.smooth, s.matrix = n, sm, sm
+    game = [B(n) for n in ('Waist', 'Spine_1', 'Spine_2', 'Neck', 'Head', 'Clavicle_L', 'Arm_1_L', 'Arm_2_L', 'Wrist_L',
+                           'Leg_1_R', 'Leg_2_R', 'Ankle_R', 'Toe_R')]
+    class Rg:
+        names = ['mixamorig:Hips', 'UpperBody', 'UpperBody2', 'neck_01', 'head', 'Shoulder_L', 'Arm_L', 'Elbow_L', 'HandTwist_L',
+                 'RightUpLeg', 'RightLeg', 'RightFoot', 'RightToeBase', 'LegIK_R', 'IndexFinger1_L', 'Lower_Arm.L']
+    m = retarget.auto_map(Rg, game)
+    for k, v in {'UpperBody': 'Spine_1', 'UpperBody2': 'Spine_2', 'neck_01': 'Neck', 'head': 'Head', 'Shoulder_L': 'Clavicle_L',
+                 'Arm_L': 'Arm_1_L', 'Elbow_L': 'Arm_2_L', 'HandTwist_L': 'Wrist_L', 'Lower_Arm.L': 'Arm_2_L'}.items():
+        check(m.get(k) == v, 'auto_map %s -> %s, got %s' % (k, v, m.get(k)))
+    check('LegIK_R' not in m and 'IndexFinger1_L' not in m, 'auto_map leaves IK and finger joints out')
+
+
+def test_restbl():
+    import restbl
+    pairs = sorted([(restbl.Restbl.key('Tex/x.bntx'), 1000), (5, 7)])       # the table is sorted by hash
+    tbl = b'RESTBL' + struct.pack('<IIII', 1, 0xa0, 2, 0) + b''.join(struct.pack('<II', h, s) for h, s in pairs)
+    t = restbl.Restbl(tbl)
+    check(t.to_bytes() == tbl, 'RESTBL round trip')
+    check(t.get('Tex/x.bntx.zs') == 1000, 'RESTBL lookup ignores the .zs suffix')
+    t.set('Tex/x.bntx.zs', 1234)
+    check(restbl.Restbl(t.to_bytes()).get('Tex/x.bntx') == 1234, 'RESTBL set')
+
+
+def test_block_encoders():
+    """BC1 and ASTC encoders checked by an independent decoder (texture2ddecoder, a dev-only package: skipped without it)."""
+    import block_encode
+    rng = np.random.default_rng(5)
+    yy, xx = np.mgrid[0:96, 0:96]
+    img = np.stack([xx * 2.5, yy * 2.5, (xx + yy) * 1.2], -1).astype(np.uint8)
+    img[30:60, 30:60] = (230, 40, 40)                                   # a hard-edged patch
+    check(block_encode.encode_bc1(img).shape == (24, 24, 8), 'BC1 block array shape')
+    check(block_encode.encode_astc(img, 8, 8).shape == (12, 12, 16), 'ASTC block array shape')
+    for bw, bh in ((8, 8), (10, 8), (12, 12)):
+        wg, hg, _l, _a, _b, qb = block_encode.best_config(bw, bh)
+        check(24 <= wg * hg * qb <= 63 and wg <= bw and hg <= bh, 'ASTC %dx%d: a legal weight grid within 63 bits' % (bw, bh))
+    try:
+        import texture2ddecoder as t2d
+    except ImportError:
+        print('(texture2ddecoder not installed: the decoder cross-check is skipped)')
+        return
+
+    def psnr(a, b):
+        mse = ((a.astype(float) - b.astype(float)) ** 2).mean()
+        return 99.0 if mse == 0 else 10 * np.log10(255 ** 2 / mse)
+    dec = np.frombuffer(t2d.decode_bc1(block_encode.encode_bc1(img).tobytes(), 96, 96), np.uint8).reshape(96, 96, 4)[..., [2, 1, 0]]
+    check(psnr(img, dec) > 30, 'BC1 round trip through an independent decoder: %.1f dB' % psnr(img, dec))
+    dec = np.frombuffer(t2d.decode_astc(block_encode.encode_astc(img, 8, 8).tobytes(), 96, 96, 8, 8), np.uint8).reshape(96, 96, 4)[..., [2, 1, 0]]
+    check(psnr(img, dec) > 25, 'ASTC 8x8 round trip through an independent decoder: %.1f dB' % psnr(img, dec))
+
+
+def test_backup():
+    import tempfile
+    import time
+    import backup
+    with tempfile.TemporaryDirectory() as md:
+        mod = os.path.join(md, 'm')
+        os.makedirs(os.path.join(mod, 'romfs', 'Model'))
+        open(os.path.join(mod, 'romfs', 'Model', 'a.bin'), 'wb').write(b'version one')
+        check(backup.snapshot(md, 'nothing') is None, 'a mod that does not exist has nothing to back up')
+        s1 = backup.snapshot(md, 'm', 'first')
+        check(s1 and os.path.isfile(os.path.join(s1, 'romfs', 'Model', 'a.bin')), 'snapshot copies the mod')
+        check(backup.DIRNAME.startswith('_'), 'the backups folder name is one the game\'s mod loader skips')
+        open(os.path.join(mod, 'romfs', 'Model', 'a.bin'), 'wb').write(b'version two')
+        time.sleep(1.1)
+        backup.restore(md, s1)
+        check(open(os.path.join(mod, 'romfs', 'Model', 'a.bin'), 'rb').read() == b'version one', 'restore brings the old files back')
+        snaps = backup.list_snapshots(md, 'm')
+        check(len(snaps) == 2 and any('before restoring' in s[3].get('reason', '') for s in snaps),
+              'a restore backs up what it replaces first: %r' % [s[3].get('reason') for s in snaps])
+        off = backup.set_enabled(md, 'm', False)
+        check(os.path.basename(off) == '-m' and backup.mods(md) == [('m', False)], 'switching off renames to -m')
+        backup.set_enabled(md, 'm', True)
+        snap = backup.remove(md, 'm')
+        check(snap and not os.path.exists(mod) and backup.mods(md) == [], 'remove deletes the mod and keeps a backup')
+        dest = backup.restore(md, snap)
+        check(os.path.isfile(os.path.join(dest, 'romfs', 'Model', 'a.bin')), 'a removed mod can be restored')
+        for i in range(backup.KEEP + 3):
+            backup.snapshot(md, 'm', 'n%d' % i)
+        check(len(backup.list_snapshots(md, 'm')) <= backup.KEEP, 'old backups are pruned')
+
+
 if __name__ == '__main__':
-    for t in (test_formats, test_decode, test_sarc, test_encode_roundtrip, test_obj_and_autoskin):
+    for t in (test_formats, test_decode, test_sarc, test_encode_roundtrip, test_obj_and_autoskin, test_gltf_and_retarget, test_restbl,
+              test_block_encoders, test_backup):
         t()
     print('assetswap reader checks passed')

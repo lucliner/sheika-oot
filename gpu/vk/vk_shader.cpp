@@ -540,11 +540,9 @@ Shader::Profile make_profile() {
     p.support_scaled_attributes = false;   // (*_UI2F / *_I2F read as integers, converted in the shader: R32 has no scaled format)
     p.support_multi_viewport = true;
     p.support_sampled_image_array_nonuniform_indexing = true;
-    // (sheikah) a graphics stage the GPU cannot pin to 32 lanes runs at its default: 64 on AMD, where only compute is pinned
-    // (vk_main.cpp). The translator then keeps each 32-lane guest warp to its half of the host's, as Eden does on AMD; the
-    // long path is right at 32 lanes too. The ballots and shuffles of the game's fragment shaders ran across both halves
-    p.warp_size_potentially_larger_than_guest =
-        dev.subgroup_size > 32 && (dev.sg32_stages & VK_SHADER_STAGE_ALL_GRAPHICS) != VK_SHADER_STAGE_ALL_GRAPHICS;
+    // Unpinned SPIR-V 1.6 stages can use any supported subgroup size, even when the default is 32.
+    // The stage-specific profiles below keep the short path only where pin_subgroup actually pins 32 lanes.
+    p.warp_size_potentially_larger_than_guest = dev.subgroup_max > 32;
     // (RX_VK_WARP64=0 or 1, a test: the graphics stages' long warp path off or on, whatever the GPU; in the cache's stamp)
     if (const char* e = getenv("RX_VK_WARP64")) p.warp_size_potentially_larger_than_guest = e[0] == '1';
     p.lower_left_origin_mode = false;
@@ -747,12 +745,49 @@ uint64_t answers_hash(const Program& p) {
         h = (h ^ ((uint64_t)a.stage << 32 | (uint64_t)a.desc << 16 | (uint64_t)a.type << 1 | (uint64_t)a.image)) * 1099511628211ull;
     return h;
 }
+}  // namespace
+uint64_t answers_hash_of(const std::vector<Program::Answer>& answers) {   // (sheikah: answers no program holds)
+    Program q;
+    q.answers = answers;
+    return answers_hash(q);
+}
+// (sheikah) An answer's stage as every GPU numbers it: the mesh fallback's program has a generated vertex stage after its mesh stage
+// ((task,) mesh, vertex, fragment), which asks nothing; a native mesh program has none ((task,) mesh, fragment). Counted without it,
+// the fragment stage's answers are the same on both, and so is the variant's hash (the pipeline state list, vk_draw.cpp)
+namespace {
+size_t generated_stage(const Program& p) {
+    if (p.fallback)
+        for (size_t k = 0; k < p.stages.size(); k++)
+            if (p.stages[k].vk_stage == VK_SHADER_STAGE_VERTEX_BIT) return k;
+    return SIZE_MAX;
+}
+}  // namespace
+std::vector<Program::Answer> answers_portable(const Program& p) {
+    const size_t g = generated_stage(p);
+    std::vector<Program::Answer> out = p.answers;
+    for (Program::Answer& a : out)
+        if (a.stage > g) a.stage--;
+    return out;
+}
+std::vector<Program::Answer> answers_here(const Program& p, std::vector<Program::Answer> portable) {
+    const size_t g = generated_stage(p);
+    for (Program::Answer& a : portable)
+        if (a.stage >= g) a.stage++;
+    return portable;
+}
+uint64_t portable_variant(const Program& p) {
+    return generated_stage(p) == SIZE_MAX ? p.variant : answers_hash_of(answers_portable(p));
+}
+namespace {
 // (an unbound slot answers what the instruction itself says: nothing to tell the variants apart by, and a program prepared before
 // the game, with nothing bound at all, comes out as the plain variant of each of its slots)
 void record_answers(Program& p, const NvnState& s) {
     p.answers.clear();
-    if (answers_in && answers_fit(p, *answers_in)) {   // (the pipeline state list's variant: the answers it was made with)
-        p.answers = *answers_in;
+    // (the pipeline state list's variant: the answers it was made with, numbered as every GPU numbers its stages: answers_portable)
+    std::vector<Program::Answer> here;
+    if (answers_in) here = answers_here(p, *answers_in);
+    if (answers_in && answers_fit(p, here)) {
+        p.answers = std::move(here);
         p.variant = answers_hash(p);
         return;
     }
@@ -1082,9 +1117,11 @@ uint64_t disk_stamp() {
     const uint32_t mesh = (dev.mesh_shader ? 1u : 0u) | (dev.mesh_fallback ? 2u : 0u) | (dev.task_mesh_fallback ? 4u : 0u);
     add(&mesh, sizeof mesh);
     // (and what of the GPU the translator is told (make_profile): its warps' lanes and the driver's shuffle workaround, and
-    // which stages it pins to 32 lanes, which keep the short path: profile_graphics)
+    // which stages it pins to 32 lanes, which keep the short path: profile_graphics. An explicit warp override bypasses
+    // the pinned graphics profile even if the base profile already has the requested width)
     const uint32_t lanes[] = {profile().warp_size_potentially_larger_than_guest ? 1u : 0u, profile().max_subgroup_size,
-                              profile().has_broken_spirv_fragment_shuffle ? 1u : 0u, (uint32_t)dev.sg32_stages};
+                              profile().has_broken_spirv_fragment_shuffle ? 1u : 0u, (uint32_t)dev.sg32_stages,
+                              getenv("RX_VK_WARP64") ? 1u : 0u};
     add(lanes, sizeof lanes);
     // (the records keep Shader::Info as it lies in memory: a cache written by another C++ library (the MSVC build's, then the
     // llvm-mingw one's libc++) has other layouts, and reading it crashed at start. The library and the sizes, so it starts again)
@@ -2754,6 +2791,14 @@ const Program* seed_variant_of(const uint64_t code[3], bool mesh, const uint32_t
     return variants.back().get();
 }
 
+const Program* program_find_portable(uint64_t key, uint64_t variant) {
+    std::lock_guard lk(shader_mu);
+    auto it = programs.find(key);
+    if (it == programs.end()) return nullptr;
+    for (auto& p : it->second)
+        if (p->ready.load(std::memory_order_acquire) && !p->failed && portable_variant(*p) == variant) return p.get();
+    return nullptr;
+}
 const Program* program_find(uint64_t key, uint64_t variant) {
     std::lock_guard lk(shader_mu);
     auto it = programs.find(key);

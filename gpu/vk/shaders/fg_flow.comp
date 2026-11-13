@@ -10,15 +10,31 @@ void main() {
     if (any(greaterThanEqual(g, imageSize(flow)))) return;
     const ivec2 lm = textureSize(la, 0) - 1;
     const ivec2 c = g * 4 + 2;
+    // (sheikah) The blocks are compared with their own mean brightness taken off. Volumetric fog and haze change in brightness from
+    // frame to frame without moving; compared as they are, that change was matched by a shift along the haze's gradient (up to 32
+    // pixels), and the made frame showed the fog displaced, a flicker over every distant fog. With the mean off, a brightness change
+    // leaves nothing to match, the bias below keeps the vector at zero, and the made frames cross-fade it instead
     float pa[64];
-    for (int i = 0; i < 64; i++) pa[i] = texelFetch(la, clamp(c + ivec2(i % 8 - 4, i / 8 - 4), ivec2(0), lm), 0).r;
+    float ma = 0.0;
+    for (int i = 0; i < 64; i++) {
+        pa[i] = texelFetch(la, clamp(c + ivec2(i % 8 - 4, i / 8 - 4), ivec2(0), lm), 0).r;
+        ma += pa[i];
+    }
+    ma /= 64.0;
+    for (int i = 0; i < 64; i++) pa[i] -= ma;
     float best = 1e9;
     ivec2 bv = ivec2(0);
     for (int dy = -RADIUS; dy <= RADIUS; dy++)
         for (int dx = -RADIUS; dx <= RADIUS; dx++) {
+            float pb[64];
+            float mb = 0.0;
+            for (int i = 0; i < 64; i++) {
+                pb[i] = texelFetch(lb, clamp(c + ivec2(i % 8 - 4 + dx, i / 8 - 4 + dy), ivec2(0), lm), 0).r;
+                mb += pb[i];
+            }
+            mb /= 64.0;
             float sad = 0.0;
-            for (int i = 0; i < 64; i++)
-                sad += abs(pa[i] - texelFetch(lb, clamp(c + ivec2(i % 8 - 4 + dx, i / 8 - 4 + dy), ivec2(0), lm), 0).r);
+            for (int i = 0; i < 64; i++) sad += abs(pa[i] - (pb[i] - mb));
             // (a vector must earn its length: flat haze and sky match anywhere, and any one chosen there swims)
             const float cost = sad + 0.12 * float(abs(dx) + abs(dy)) + (dx != 0 || dy != 0 ? 0.6 : 0.0);
             if (cost < best) best = cost, bv = ivec2(dx, dy);

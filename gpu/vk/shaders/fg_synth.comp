@@ -19,7 +19,7 @@ void main() {
     const float t = pc.t;
     const vec3 a0 = texelFetch(fa, g, 0).rgb, b0 = texelFetch(fb, g, 0).rgb;
     const vec3 still = mix(a0, b0, t);
-    const float moved = smoothstep(0.03, 0.09, gap(a0, b0));
+    const float moved = smoothstep(0.10, 0.22, gap(a0, b0));
     if (moved <= 0.0) { imageStore(dst, g, vec4(still, 1.0)); return; }
     const vec2 p = vec2(g) + 0.5;
     const vec2 fp = p / 16.0 - 0.5;

@@ -1,8 +1,10 @@
-"""Asset Swap for Sheikah: replace character models with models from elsewhere.
+"""Asset Swapper: replace character models with models from elsewhere.
 
     python -I tools/assetswap inspect  <romfs> <Model/File.bfres.zs> [--bones]
     python -I tools/assetswap preview <romfs> <Model/File.bfres.zs> <out.png> [--yaw deg]
     python -I tools/assetswap swap <romfs> <Model/File.bfres.zs> <model.obj> --mod <mod folder> [--scale s] [--rotate-y deg] [--preview out.png]
+    python -I tools/assetswap ui
+    python -I tools/assetswap backup list|create|restore|on|off|remove --mods <mods folder> [--mod name] [--stamp when]
     python -I tools/assetswap export-obj <romfs> <Model/File.bfres.zs> <out.obj>
 
 Run from the repository root. Reads your own romfs; writes only where you tell it.
@@ -155,9 +157,51 @@ def cmd_swap(a):
     from swap import swap
     off = tuple(float(x) for x in a.offset.split(',')) if a.offset else (0, 0, 0)
     slots = [int(x) for x in a.slots.split(',')] if a.slots else None
-    back = swap(a.romfs, a.model, a.file, a.mod, a.scale, a.rotate_y, off, slots, not a.no_textures)
+    import json
+    profile = json.load(open(a.profile, encoding='utf-8')) if a.profile else None
+    plan = swap(a.romfs, a.model, a.file, a.mod, a.scale, a.rotate_y, off, slots, not a.no_textures, profile=profile)
     if a.preview:
-        print(render(model_triangles(back, a.pose), a.preview, a.yaw, a.size, a.pitch))
+        print(render(plan.triangles(a.pose), a.preview, a.yaw, a.size, a.pitch))
+
+
+def cmd_actor_swap(a):
+    import actorswap
+    import containers
+    rom = containers.Romfs(a.romfs)
+    for pair in a.pairs:
+        old, new = pair.split('=')
+        if a.spawn:
+            for rel, data in actorswap.build(rom, old, new).items():
+                p = os.path.join(a.mod, 'romfs', *rel.split('/'))
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                open(p, 'wb').write(data)
+        else:
+            actorswap.build_hybrid(rom, a.mod, old, new)
+
+
+def cmd_backup(a):
+    import backup
+    md = a.mods
+    if a.action == 'list':
+        for mod, stamp, path, meta in backup.list_snapshots(md, a.mod):
+            print('%-18s %-18s %4s files  %s' % (mod, stamp, meta.get('files', '?'), meta.get('reason', '')))
+        print('mods:', ', '.join('%s (%s)' % (n, 'on' if on else 'off') for n, on in backup.mods(md)) or 'none')
+    elif a.action == 'create':
+        print(backup.snapshot(md, a.mod, 'by hand') or 'nothing to back up')
+    elif a.action == 'restore':
+        snaps = [s for s in backup.list_snapshots(md, a.mod) if not a.stamp or s[1] == a.stamp]
+        if not snaps:
+            raise SystemExit('no such backup')
+        print('restored to', backup.restore(md, snaps[0][2]))
+    elif a.action in ('on', 'off'):
+        print(backup.set_enabled(md, a.mod, a.action == 'on'))
+    elif a.action == 'remove':
+        print('removed; backup kept at', backup.remove(md, a.mod))
+
+
+def cmd_ui(a):
+    import ui
+    ui.main()
 
 
 def main(argv=None):
@@ -182,7 +226,19 @@ def main(argv=None):
     p.add_argument('--preview'); p.add_argument('--yaw', type=float, default=0.0)
     p.add_argument('--size', type=int, default=900); p.add_argument('--pitch', type=float, default=0.0)
     p.add_argument('--pose', action='store_true'); p.add_argument('--no-textures', action='store_true')
+    p.add_argument('--profile', help='JSON profile: bone_map, slots, texture_map, attachments, scale, ... (see swap.py)')
     p.set_defaults(fn=cmd_swap)
+    p = sub.add_parser('actor-swap', help='make an NPC look like another NPC but keep its AI and behaviour (OLD=NEW pairs), as a mod')
+    p.add_argument('romfs'); p.add_argument('pairs', nargs='+', help='Npc_Zora_001=Npc_Gerudo_001')
+    p.add_argument('--mod', required=True)
+    p.add_argument('--spawn', action='store_true', help='spawn the new actor whole (its own AI too) instead of keeping the old brain')
+    p.set_defaults(fn=cmd_actor_swap)
+    p = sub.add_parser('backup', help='list, create and restore backups of a mod; switch it on or off; remove it')
+    p.add_argument('action', choices=['list', 'create', 'restore', 'on', 'off', 'remove'])
+    p.add_argument('--mods', required=True, help='the mods folder of the game'); p.add_argument('--mod'); p.add_argument('--stamp')
+    p.set_defaults(fn=cmd_backup)
+    p = sub.add_parser('ui', help='open the Asset Swapper window')
+    p.set_defaults(fn=cmd_ui)
     a = ap.parse_args(argv)
     a.fn(a)
 
